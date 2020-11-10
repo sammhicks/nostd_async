@@ -1,0 +1,15 @@
+[package]
+name = "nostd_async"
+version = "0.1.0"
+authors = ["Samuel Hicks <SamMHicks@hotmail.co.uk>"]
+edition = "2018"
+description = "An asyncronous runtime for a single-threaded no_std environment"
+readme = "README.md"
+license = "MIT"
+keywords = ["asynchronous", "async", "embedded", "no-std", "nostd"]
+categories = ["asynchronous", "embedded", "no-std"]
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
