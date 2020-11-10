@@ -11,7 +11,7 @@
 //!
 //! handle.join();
 //! ```
-//! See more examples in the [examples directory]("https://github.com/sammhicks/nostd_async/tree/master/examples")
+//! See more examples in the [examples directory](https://github.com/sammhicks/nostd_async/tree/master/examples)
 
 mod linked_list;
 mod task;

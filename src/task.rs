@@ -69,9 +69,13 @@ impl LinkedListItem for TaskCore {
     }
 }
 
+/// A joinable handle for a task.
+///
+/// The task is aborted if the handle is dropped.
 pub struct JoinHandle<'t>(&'t mut TaskCore);
 
 impl<'t> JoinHandle<'t> {
+    /// Drive the runtime until the handle's task completes.
     pub fn join(self) {
         while self.0.future.is_some() {
             unsafe {
@@ -87,6 +91,7 @@ impl<'t> core::ops::Drop for JoinHandle<'t> {
     }
 }
 
+/// An asyncronous task
 pub struct Task<'t, F: Future<Output = ()> + 't> {
     core: Option<TaskCore>,
     future: F,
@@ -94,6 +99,7 @@ pub struct Task<'t, F: Future<Output = ()> + 't> {
 }
 
 impl<'t, F: Future<Output = ()> + 't> Task<'t, F> {
+    /// Create a new task from a future
     pub fn new(future: F) -> Self {
         Self {
             core: None,
@@ -102,6 +108,8 @@ impl<'t, F: Future<Output = ()> + 't> Task<'t, F> {
         }
     }
 
+    /// Spawn the task into the given runtime.
+    /// Note that the task will not be run until a join handle is joined.
     pub fn spawn(&'t mut self, runtime: &'t Runtime) -> JoinHandle<'t> {
         if self.core.is_some() {
             panic!("Task already spawned");
@@ -124,21 +132,18 @@ impl<'t, F: Future<Output = ()> + 't> Task<'t, F> {
     }
 }
 
+/// The asyncronous runtime.
+///
+/// Note that it is **not threadsafe** and should thus only be run from a single thread.
 #[derive(Default)]
 pub struct Runtime {
     tasks: Option<LinkedListEnds<NonNull<TaskCore>>>,
 }
 
 impl Runtime {
+    // Create a new runtime
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn spawn<'t, F: Future<Output = ()> + 't>(
-        &'t self,
-        task: &'t mut Task<'t, F>,
-    ) -> JoinHandle<'t> {
-        task.spawn(self)
     }
 
     fn run_once(&mut self) {

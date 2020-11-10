@@ -7,6 +7,7 @@ pub fn main() {
     let h1 = t1.spawn(&runtime);
     let h2 = t2.spawn(&runtime);
 
+    // Note that despice the fact that h2 is joined first, h1 runs first
     h2.join();
     h1.join();
 }
