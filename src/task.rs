@@ -72,45 +72,70 @@ impl LinkedListItem for TaskCore {
 /// A joinable handle for a task.
 ///
 /// The task is aborted if the handle is dropped.
-pub struct JoinHandle<'t>(&'t mut TaskCore);
+pub struct JoinHandle<'t, T> {
+    task_core: &'t mut TaskCore,
+    result: &'t mut Option<T>,
+}
 
-impl<'t> JoinHandle<'t> {
+impl<'t, T> JoinHandle<'t, T> {
     /// Drive the runtime until the handle's task completes.
-    pub fn join(self) {
-        while self.0.future.is_some() {
+    pub fn join(self) -> T {
+        while self.task_core.future.is_some() {
             unsafe {
-                self.0.runtime.as_mut().run_once();
+                self.task_core.runtime.as_mut().run_once();
             }
         }
+        self.result.take().expect("No Result")
     }
 }
 
-impl<'t> core::ops::Drop for JoinHandle<'t> {
+impl<'t, T> core::ops::Drop for JoinHandle<'t, T> {
     fn drop(&mut self) {
-        self.0.remove();
+        self.task_core.remove();
+    }
+}
+
+struct CapturingFuture<F: Future> {
+    future: F,
+    result: Option<F::Output>,
+}
+
+impl<F: Future> Future for CapturingFuture<F> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> core::task::Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        let future = unsafe { Pin::new_unchecked(&mut this.future) };
+        let result = &mut this.result;
+        future.poll(cx).map(|value| {
+            *result = Some(value);
+        })
     }
 }
 
 /// An asyncronous task
-pub struct Task<'t, F: Future<Output = ()> + 't> {
+pub struct Task<'t, F: Future<Output = T> + 't, T: 't> {
     core: Option<TaskCore>,
-    future: F,
-    _phantom: PhantomData<&'t ()>,
+    future: CapturingFuture<F>,
+    _phantom: PhantomData<&'t T>,
 }
 
-impl<'t, F: Future<Output = ()> + 't> Task<'t, F> {
+impl<'t, F: Future<Output = T> + 't, T: 't> Task<'t, F, T> {
     /// Create a new task from a future
     pub fn new(future: F) -> Self {
         Self {
             core: None,
-            future,
+            future: CapturingFuture {
+                future,
+                result: None,
+            },
             _phantom: PhantomData,
         }
     }
 
     /// Spawn the task into the given runtime.
     /// Note that the task will not be run until a join handle is joined.
-    pub fn spawn(&'t mut self, runtime: &'t Runtime) -> JoinHandle<'t> {
+    pub fn spawn(&'t mut self, runtime: &'t Runtime) -> JoinHandle<'t, T> {
         if self.core.is_some() {
             panic!("Task already spawned");
         }
@@ -124,11 +149,14 @@ impl<'t, F: Future<Output = ()> + 't> Task<'t, F> {
             next: None,
         });
 
-        let core = self.core.as_mut().unwrap();
+        let task_core = self.core.as_mut().unwrap();
 
-        core.insert_back();
+        task_core.insert_back();
 
-        JoinHandle(core)
+        JoinHandle {
+            task_core,
+            result: &mut self.future.result,
+        }
     }
 }
 

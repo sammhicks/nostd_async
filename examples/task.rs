@@ -1,9 +1,12 @@
 pub fn main() {
     let runtime = nostd_async::Runtime::new();
 
-    let mut task = nostd_async::Task::new(async { println!("Hello World") });
+    let mut task = nostd_async::Task::new(async {
+        println!("Hello World");
+        42
+    });
 
     let handle = task.spawn(&runtime);
 
-    handle.join();
+    println!("{}", handle.join());
 }

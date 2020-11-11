@@ -1,6 +1,6 @@
 [package]
 name = "nostd_async"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Samuel Hicks <SamMHicks@hotmail.co.uk>"]
 edition = "2018"
 description = "An asyncronous runtime for a single-threaded no_std environment"
