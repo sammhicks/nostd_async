@@ -87,6 +87,8 @@ pub struct JoinHandle<'t, T> {
 
 impl<'t, T> JoinHandle<'t, T> {
     /// Drive the runtime until the handle's task completes.
+    ///
+    /// Returns the value returned by the future
     pub fn join(self) -> T {
         while self.task_core.future.is_some() {
             unsafe {
