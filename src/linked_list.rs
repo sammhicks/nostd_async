@@ -35,7 +35,7 @@ pub trait LinkedListItem {
 
     fn insert_front(&mut self) {
         if self.is_in_queue() {
-            panic!("Already in queue");
+            return;
         }
 
         let self_ptr = NonNull::from(self as &Self);
@@ -61,7 +61,7 @@ pub trait LinkedListItem {
 
     fn insert_back(&mut self) {
         if self.is_in_queue() {
-            panic!("Already in queue");
+            return;
         }
 
         let self_ptr = NonNull::from(self as &Self);

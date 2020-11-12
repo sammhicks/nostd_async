@@ -10,9 +10,15 @@ unsafe fn waker_clone(context: *const ()) -> RawWaker {
     RawWaker::new(context, &RAW_WAKER_VTABLE)
 }
 
-unsafe fn waker_wake(_context: *const ()) {}
+unsafe fn waker_wake(context: *const ()) {
+    let task = &mut *(context as *mut TaskCore);
+    task.insert_back();
+}
 
-unsafe fn waker_wake_by_ref(_context: *const ()) {}
+unsafe fn waker_wake_by_ref(context: *const ()) {
+    let task = &mut *(context as *mut TaskCore);
+    task.insert_back();
+}
 
 unsafe fn waker_drop(_context: *const ()) {}
 
@@ -32,7 +38,8 @@ impl TaskCore {
             self.remove();
 
             let future = unsafe { Pin::new_unchecked(&mut *future) };
-            let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
+            let data = self as *mut Self as *const ();
+            let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
             let mut cx = Context::from_waker(&waker);
 
             if future.poll(&mut cx).is_ready() {

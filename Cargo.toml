@@ -1,6 +1,6 @@
 [package]
 name = "nostd_async"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Samuel Hicks <SamMHicks@hotmail.co.uk>"]
 edition = "2018"
 description = "An asyncronous runtime for a single-threaded no_std environment"
@@ -13,3 +13,7 @@ categories = ["asynchronous", "embedded", "no-std"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+
+[dev-dependencies]
+futures-micro = "0.4"
