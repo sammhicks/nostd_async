@@ -52,7 +52,8 @@ impl TaskCore {
 impl LinkedListItem for TaskCore {
     fn links(
         &self,
-    ) -> LinkedListLinks<&Option<NonNull<Self>>, &Option<LinkedListEnds<NonNull<Self>>>> {
+    ) -> LinkedListLinks<*const Option<NonNull<Self>>, *const Option<LinkedListEnds<NonNull<Self>>>>
+    {
         unsafe {
             LinkedListLinks {
                 previous: &self.previous,
@@ -64,7 +65,7 @@ impl LinkedListItem for TaskCore {
 
     fn links_mut(
         &mut self,
-    ) -> LinkedListLinks<&mut Option<NonNull<Self>>, &mut Option<LinkedListEnds<NonNull<Self>>>>
+    ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>
     {
         unsafe {
             LinkedListLinks {

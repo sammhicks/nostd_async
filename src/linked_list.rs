@@ -1,4 +1,4 @@
-use core::ptr::NonNull;
+use core::ptr::{read_volatile, write_volatile, NonNull};
 
 #[derive(Debug)]
 pub struct LinkedListLinks<T, E> {
@@ -13,24 +13,29 @@ pub struct LinkedListEnds<T> {
     pub last: T,
 }
 
+unsafe fn take_volatile<T>(ptr: *mut Option<T>) -> Option<T> {
+    let value = read_volatile(ptr);
+    write_volatile(ptr, None);
+    value
+}
+
 pub trait LinkedListItem {
     fn links(
         &self,
-    ) -> LinkedListLinks<&Option<NonNull<Self>>, &Option<LinkedListEnds<NonNull<Self>>>>;
+    ) -> LinkedListLinks<*const Option<NonNull<Self>>, *const Option<LinkedListEnds<NonNull<Self>>>>;
 
     fn links_mut(
         &mut self,
-    ) -> LinkedListLinks<&mut Option<NonNull<Self>>, &mut Option<LinkedListEnds<NonNull<Self>>>>;
+    ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>;
 
     fn is_in_queue(&self) -> bool {
         let links = self.links();
-        links.previous.is_some()
-            || links.next.is_some()
-            || self
-                .links()
-                .ends
-                .as_ref()
-                .map_or(false, |ends| core::ptr::eq(ends.first.as_ptr(), self))
+        unsafe {
+            read_volatile(links.previous).is_some()
+                || read_volatile(links.next).is_some()
+                || read_volatile(links.ends)
+                    .map_or(false, |ends| core::ptr::eq(ends.first.as_ptr(), self))
+        }
     }
 
     fn insert_front(&mut self) {
@@ -43,17 +48,20 @@ pub trait LinkedListItem {
         let links = self.links_mut();
 
         unsafe {
-            match links.ends {
-                Some(ends) => {
-                    *(ends.first.as_mut().links_mut().previous) = Some(self_ptr);
-                    *(links.next) = Some(ends.first);
-                    ends.first = self_ptr;
+            match read_volatile(links.ends) {
+                Some(mut ends) => {
+                    write_volatile(ends.first.as_mut().links_mut().previous, Some(self_ptr));
+                    write_volatile(links.next, Some(ends.first));
+                    write_volatile(&mut (&mut *links.ends).as_mut().unwrap().first, self_ptr);
                 }
                 None => {
-                    *(self.links_mut().ends) = Some(LinkedListEnds {
-                        first: self_ptr,
-                        last: self_ptr,
-                    })
+                    write_volatile(
+                        self.links_mut().ends,
+                        Some(LinkedListEnds {
+                            first: self_ptr,
+                            last: self_ptr,
+                        }),
+                    );
                 }
             }
         }
@@ -69,17 +77,20 @@ pub trait LinkedListItem {
         let links = self.links_mut();
 
         unsafe {
-            match links.ends {
-                Some(ends) => {
-                    *(ends.last.as_mut().links_mut().next) = Some(self_ptr);
-                    *(links.previous) = Some(ends.last);
-                    ends.last = self_ptr;
+            match read_volatile(links.ends) {
+                Some(mut ends) => {
+                    write_volatile(ends.last.as_mut().links_mut().next, Some(self_ptr));
+                    write_volatile(links.previous, Some(ends.last));
+                    write_volatile(&mut (&mut *links.ends).as_mut().unwrap().last, self_ptr);
                 }
                 None => {
-                    *(self.links_mut().ends) = Some(LinkedListEnds {
-                        first: self_ptr,
-                        last: self_ptr,
-                    })
+                    write_volatile(
+                        self.links_mut().ends,
+                        Some(LinkedListEnds {
+                            first: self_ptr,
+                            last: self_ptr,
+                        }),
+                    );
                 }
             }
         }
@@ -90,33 +101,48 @@ pub trait LinkedListItem {
 
         let links = self.links_mut();
 
-        match (links.previous.take(), links.next.take()) {
+        match unsafe { (take_volatile(links.previous), take_volatile(links.next)) } {
             (None, None) => {
                 // Possible not queued
-                if let Some(ends) = links.ends.as_mut() {
+                if let Some(ends) = unsafe { read_volatile(links.ends) } {
                     if core::ptr::eq(ends.first.as_ptr(), self_ptr) {
-                        *(links.ends) = None;
+                        unsafe { write_volatile(links.ends, None) };
                     }
                 }
             }
             (None, Some(mut next)) => {
                 // First in queue
-
-                links.ends.as_mut().expect("List is not empty").first = next;
-                *(unsafe { next.as_mut() }.links_mut().previous) = None;
+                unsafe {
+                    write_volatile(
+                        links.ends,
+                        Some(LinkedListEnds {
+                            first: next,
+                            last: read_volatile(links.ends).expect("List is not empty").last,
+                        }),
+                    );
+                    write_volatile(next.as_mut().links_mut().previous, None);
+                }
             }
             (Some(mut previous), Some(mut next)) => {
                 // In middle of queue
 
-                *(unsafe { previous.as_mut() }.links_mut().next) = Some(next);
-                *(unsafe { next.as_mut() }.links_mut().previous) = Some(previous);
+                unsafe {
+                    write_volatile(previous.as_mut().links_mut().next, Some(next));
+                    write_volatile(next.as_mut().links_mut().previous, Some(previous));
+                }
             }
             (Some(mut previous), None) => {
                 // Last in queue
-
-                links.ends.as_mut().expect("List is not empty").last = previous;
-
-                *(unsafe { previous.as_mut() }.links_mut().next) = None;
+                unsafe {
+                    write_volatile(
+                        links.ends,
+                        Some(LinkedListEnds {
+                            first: read_volatile(links.ends).expect("List is not empty").first,
+                            last: previous,
+                        }),
+                    );
+                    write_volatile(previous.as_mut().links_mut().next, None);
+                }
             }
         }
     }
@@ -207,8 +233,10 @@ mod tests {
     impl LinkedListItem for Node {
         fn links(
             &self,
-        ) -> LinkedListLinks<&Option<NonNull<Self>>, &Option<LinkedListEnds<NonNull<Self>>>>
-        {
+        ) -> LinkedListLinks<
+            *const Option<NonNull<Self>>,
+            *const Option<LinkedListEnds<NonNull<Self>>>,
+        > {
             LinkedListLinks {
                 previous: &self.previous,
                 next: &self.next,
@@ -218,7 +246,7 @@ mod tests {
 
         fn links_mut(
             &mut self,
-        ) -> LinkedListLinks<&mut Option<NonNull<Self>>, &mut Option<LinkedListEnds<NonNull<Self>>>>
+        ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>
         {
             LinkedListLinks {
                 previous: &mut self.previous,
