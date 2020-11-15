@@ -1,10 +1,13 @@
 [package]
 name = "nostd_async"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Samuel Hicks <SamMHicks@hotmail.co.uk>"]
 edition = "2018"
 description = "An asyncronous runtime for a single-threaded no_std environment"
+documentation = "https://docs.rs/nostd_async"
 readme = "README.md"
+homepage = "https://github.com/sammhicks/nostd_async"
+repository = "https://github.com/sammhicks/nostd_async"
 license = "MIT"
 keywords = ["asynchronous", "async", "embedded", "no-std", "nostd"]
 categories = ["asynchronous", "embedded", "no-std"]
