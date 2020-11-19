@@ -13,3 +13,12 @@ pub fn main() {
     handle.join();
 }
 ```
+
+## Features
+
+### `cortex-m`
+
+Enables Cortex-M Support.
+
+ + Disables interrupts when scheduling and descheduling tasks
+ + Waits for interrupts when there are no tasks remaining

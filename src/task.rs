@@ -6,18 +6,34 @@ use core::task::{Context, RawWaker, RawWakerVTable, Waker};
 
 use crate::linked_list::{LinkedListEnds, LinkedListItem, LinkedListLinks};
 
+#[cfg(feature = "cortex_m")]
+fn interrupt_free<F, R>(f: F) -> R
+where
+    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
+{
+    cortex_m::interrupt::free(f)
+}
+
+#[cfg(not(feature = "cortex_m"))]
+fn interrupt_free<F, R>(f: F) -> R
+where
+    F: FnOnce(()) -> R,
+{
+    f(())
+}
+
 unsafe fn waker_clone(context: *const ()) -> RawWaker {
     RawWaker::new(context, &RAW_WAKER_VTABLE)
 }
 
 unsafe fn waker_wake(context: *const ()) {
     let task = &mut *(context as *mut TaskCore);
-    task.insert_back();
+    interrupt_free(|_critical_section| task.insert_back());
 }
 
 unsafe fn waker_wake_by_ref(context: *const ()) {
     let task = &mut *(context as *mut TaskCore);
-    task.insert_back();
+    interrupt_free(|_critical_section| task.insert_back());
 }
 
 unsafe fn waker_drop(_context: *const ()) {}
@@ -35,7 +51,7 @@ struct TaskCore {
 impl TaskCore {
     fn run_once(&mut self) {
         if let Some(future) = self.future {
-            self.remove();
+            interrupt_free(|_critical_section| self.remove());
 
             let future = unsafe { Pin::new_unchecked(&mut *future) };
             let data = self as *mut Self as *const ();
@@ -188,6 +204,11 @@ impl Runtime {
         if let Some(tasks) = &mut self.tasks {
             unsafe {
                 tasks.first.as_mut().run_once();
+            }
+        } else {
+            #[cfg(feature = "cortex_m")]
+            {
+                cortex_m::asm::wfi();
             }
         }
     }
