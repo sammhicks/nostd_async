@@ -16,7 +16,9 @@
 //! ```
 //! See more examples in the [examples directory](https://github.com/sammhicks/nostd_async/tree/master/examples)
 
+mod interrupt;
 mod linked_list;
+pub mod sync;
 mod task;
 
 pub use task::{JoinHandle, Runtime, Task};

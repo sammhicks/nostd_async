@@ -4,23 +4,12 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::task::{Context, RawWaker, RawWakerVTable, Waker};
 
-use crate::linked_list::{LinkedListEnds, LinkedListItem, LinkedListLinks};
+use bare_metal::CriticalSection;
 
-#[cfg(feature = "cortex_m")]
-fn interrupt_free<F, R>(f: F) -> R
-where
-    F: FnOnce(&cortex_m::interrupt::CriticalSection) -> R,
-{
-    cortex_m::interrupt::free(f)
-}
-
-#[cfg(not(feature = "cortex_m"))]
-fn interrupt_free<F, R>(f: F) -> R
-where
-    F: FnOnce(()) -> R,
-{
-    f(())
-}
+use crate::{
+    interrupt,
+    linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
+};
 
 unsafe fn waker_clone(context: *const ()) -> RawWaker {
     RawWaker::new(context, &RAW_WAKER_VTABLE)
@@ -28,12 +17,12 @@ unsafe fn waker_clone(context: *const ()) -> RawWaker {
 
 unsafe fn waker_wake(context: *const ()) {
     let task = &mut *(context as *mut TaskCore);
-    interrupt_free(|_critical_section| task.insert_back());
+    interrupt::free(|cs| task.insert_back(cs));
 }
 
 unsafe fn waker_wake_by_ref(context: *const ()) {
     let task = &mut *(context as *mut TaskCore);
-    interrupt_free(|_critical_section| task.insert_back());
+    interrupt::free(|cs| task.insert_back(cs));
 }
 
 unsafe fn waker_drop(_context: *const ()) {}
@@ -44,14 +33,13 @@ static RAW_WAKER_VTABLE: RawWakerVTable =
 struct TaskCore {
     runtime: NonNull<Runtime>,
     future: Option<*mut dyn Future<Output = ()>>,
-    previous: Option<NonNull<TaskCore>>,
-    next: Option<NonNull<TaskCore>>,
+    links: LinkedListLinks<Self>,
 }
 
 impl TaskCore {
-    fn run_once(&mut self) {
+    fn run_once(&mut self, cs: &CriticalSection) {
         if let Some(future) = self.future {
-            interrupt_free(|_critical_section| self.remove());
+            self.remove(cs);
 
             let future = unsafe { Pin::new_unchecked(&mut *future) };
             let data = self as *mut Self as *const ();
@@ -66,30 +54,12 @@ impl TaskCore {
 }
 
 impl LinkedListItem for TaskCore {
-    fn links(
-        &self,
-    ) -> LinkedListLinks<*const Option<NonNull<Self>>, *const Option<LinkedListEnds<NonNull<Self>>>>
-    {
-        unsafe {
-            LinkedListLinks {
-                previous: &self.previous,
-                next: &self.next,
-                ends: &self.runtime.as_ref().tasks,
-            }
-        }
+    fn links(&self) -> &LinkedListLinks<Self> {
+        &self.links
     }
 
-    fn links_mut(
-        &mut self,
-    ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>
-    {
-        unsafe {
-            LinkedListLinks {
-                previous: &mut self.previous,
-                next: &mut self.next,
-                ends: &mut self.runtime.as_mut().tasks,
-            }
-        }
+    fn list(&self) -> &LinkedList<Self> {
+        unsafe { &self.runtime.as_ref().tasks }
     }
 }
 
@@ -115,9 +85,9 @@ impl<'t, T> JoinHandle<'t, T> {
     }
 }
 
-impl<'t, T> core::ops::Drop for JoinHandle<'t, T> {
+impl<'t, T> Drop for JoinHandle<'t, T> {
     fn drop(&mut self) {
-        self.task_core.remove();
+        interrupt::free(|cs| self.task_core.remove(cs));
     }
 }
 
@@ -171,13 +141,12 @@ impl<'t, F: Future<Output = T> + 't, T: 't> Task<'t, F, T> {
         self.core = Some(TaskCore {
             future,
             runtime: NonNull::from(runtime),
-            previous: None,
-            next: None,
+            links: LinkedListLinks::default(),
         });
 
         let task_core = self.core.as_mut().unwrap();
 
-        task_core.insert_back();
+        interrupt::free(|cs| task_core.insert_back(cs));
 
         JoinHandle {
             task_core,
@@ -191,7 +160,7 @@ impl<'t, F: Future<Output = T> + 't, T: 't> Task<'t, F, T> {
 /// Note that it is **not threadsafe** and should thus only be run from a single thread.
 #[derive(Default)]
 pub struct Runtime {
-    tasks: Option<LinkedListEnds<NonNull<TaskCore>>>,
+    tasks: LinkedList<TaskCore>,
 }
 
 impl Runtime {
@@ -201,15 +170,17 @@ impl Runtime {
     }
 
     fn run_once(&mut self) {
-        if let Some(tasks) = &mut self.tasks {
-            unsafe {
-                tasks.first.as_mut().run_once();
-            }
-        } else {
-            #[cfg(feature = "cortex_m")]
+        interrupt::free(|cs| {
+            if self
+                .tasks
+                .with_first(cs, |first| first.run_once(cs))
+                .is_none()
             {
-                cortex_m::asm::wfi();
+                #[cfg(feature = "cortex_m")]
+                {
+                    cortex_m::asm::wfi();
+                }
             }
-        }
+        });
     }
 }

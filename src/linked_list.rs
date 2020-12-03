@@ -1,147 +1,189 @@
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::cell::Cell;
+use core::ptr::NonNull;
 
-#[derive(Debug)]
-pub struct LinkedListLinks<T, E> {
-    pub previous: T,
-    pub next: T,
-    pub ends: E,
+use bare_metal::{CriticalSection, Mutex};
+
+struct LinkedListLink<T>(Mutex<Cell<Option<NonNull<T>>>>);
+
+impl<T> LinkedListLink<T> {
+    fn get(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
+        self.0.borrow(cs).get()
+    }
+
+    fn set(&self, cs: &CriticalSection, value: Option<NonNull<T>>) {
+        self.0.borrow(cs).set(value)
+    }
+
+    fn take(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
+        self.0.borrow(cs).take()
+    }
 }
 
-#[derive(Debug)]
-pub struct LinkedListEnds<T> {
-    pub first: T,
-    pub last: T,
+impl<T> Default for LinkedListLink<T> {
+    fn default() -> Self {
+        Self(Mutex::new(Cell::new(None)))
+    }
 }
 
-unsafe fn take_volatile<T>(ptr: *mut Option<T>) -> Option<T> {
-    let value = read_volatile(ptr);
-    write_volatile(ptr, None);
-    value
+pub struct LinkedListLinks<T> {
+    previous: LinkedListLink<T>,
+    next: LinkedListLink<T>,
 }
 
-pub trait LinkedListItem {
-    fn links(
-        &self,
-    ) -> LinkedListLinks<*const Option<NonNull<Self>>, *const Option<LinkedListEnds<NonNull<Self>>>>;
+impl<T> Default for LinkedListLinks<T> {
+    fn default() -> Self {
+        Self {
+            previous: LinkedListLink::default(),
+            next: LinkedListLink::default(),
+        }
+    }
+}
 
-    fn links_mut(
-        &mut self,
-    ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>;
+struct LinkedListCore<T> {
+    first: NonNull<T>,
+    last: NonNull<T>,
+}
 
-    fn is_in_queue(&self) -> bool {
+impl<T> Clone for LinkedListCore<T> {
+    fn clone(&self) -> Self {
+        Self {
+            first: self.first,
+            last: self.last,
+        }
+    }
+}
+
+impl<T> Copy for LinkedListCore<T> {}
+
+pub struct LinkedList<T> {
+    core: Mutex<Cell<Option<LinkedListCore<T>>>>,
+}
+
+impl<T> LinkedList<T> {
+    pub fn with_first<F, R>(&self, cs: &CriticalSection, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut T) -> R,
+    {
+        self.core
+            .borrow(cs)
+            .get()
+            .map(|mut core| f(unsafe { core.first.as_mut() }))
+    }
+}
+
+impl<T> Default for LinkedList<T> {
+    fn default() -> Self {
+        Self {
+            core: Mutex::new(Cell::new(None)),
+        }
+    }
+}
+
+pub trait LinkedListItem: Sized {
+    fn links(&self) -> &LinkedListLinks<Self>;
+
+    fn list(&self) -> &LinkedList<Self>;
+
+    fn is_in_queue(&self, cs: &CriticalSection) -> bool {
         let links = self.links();
-        unsafe {
-            read_volatile(links.previous).is_some()
-                || read_volatile(links.next).is_some()
-                || read_volatile(links.ends)
-                    .map_or(false, |ends| core::ptr::eq(ends.first.as_ptr(), self))
-        }
+        links.previous.get(cs).is_some()
+            || links.next.get(cs).is_some()
+            || self
+                .list()
+                .core
+                .borrow(cs)
+                .get()
+                .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
-    fn insert_front(&mut self) {
-        if self.is_in_queue() {
+    fn insert_front(&mut self, cs: &CriticalSection) {
+        if self.is_in_queue(cs) {
             return;
         }
 
         let self_ptr = NonNull::from(self as &Self);
 
-        let links = self.links_mut();
+        let list = self.list().core.borrow(cs);
 
-        unsafe {
-            match read_volatile(links.ends) {
-                Some(mut ends) => {
-                    write_volatile(ends.first.as_mut().links_mut().previous, Some(self_ptr));
-                    write_volatile(links.next, Some(ends.first));
-                    write_volatile(&mut (&mut *links.ends).as_mut().unwrap().first, self_ptr);
-                }
-                None => {
-                    write_volatile(
-                        self.links_mut().ends,
-                        Some(LinkedListEnds {
-                            first: self_ptr,
-                            last: self_ptr,
-                        }),
-                    );
-                }
+        match list.get() {
+            Some(mut core) => {
+                self.links().next.set(cs, Some(core.first));
+                unsafe { core.first.as_ref().links().previous.set(cs, Some(self_ptr)) };
+                core.first = self_ptr;
+                list.set(Some(core));
             }
+            None => list.set(Some(LinkedListCore {
+                first: self_ptr,
+                last: self_ptr,
+            })),
         }
     }
 
-    fn insert_back(&mut self) {
-        if self.is_in_queue() {
+    fn insert_back(&mut self, cs: &CriticalSection) {
+        if self.is_in_queue(cs) {
             return;
         }
 
         let self_ptr = NonNull::from(self as &Self);
 
-        let links = self.links_mut();
+        let list = self.list().core.borrow(cs);
 
-        unsafe {
-            match read_volatile(links.ends) {
-                Some(mut ends) => {
-                    write_volatile(ends.last.as_mut().links_mut().next, Some(self_ptr));
-                    write_volatile(links.previous, Some(ends.last));
-                    write_volatile(&mut (&mut *links.ends).as_mut().unwrap().last, self_ptr);
-                }
-                None => {
-                    write_volatile(
-                        self.links_mut().ends,
-                        Some(LinkedListEnds {
-                            first: self_ptr,
-                            last: self_ptr,
-                        }),
-                    );
-                }
+        match list.get() {
+            Some(mut core) => {
+                self.links().previous.set(cs, Some(core.last));
+                unsafe { core.last.as_ref().links().next.set(cs, Some(self_ptr)) };
+                core.last = self_ptr;
+                list.set(Some(core));
             }
+            None => list.set(Some(LinkedListCore {
+                first: self_ptr,
+                last: self_ptr,
+            })),
         }
     }
 
-    fn remove(&mut self) {
+    fn remove(&mut self, cs: &CriticalSection) {
         let self_ptr = self as *const Self;
 
-        let links = self.links_mut();
+        let links = self.links();
+        let list = self.list().core.borrow(cs);
 
-        match unsafe { (take_volatile(links.previous), take_volatile(links.next)) } {
+        match (links.previous.take(cs), links.next.take(cs)) {
             (None, None) => {
                 // Possible not queued
-                if let Some(ends) = unsafe { read_volatile(links.ends) } {
+                if let Some(ends) = list.get() {
                     if core::ptr::eq(ends.first.as_ptr(), self_ptr) {
-                        unsafe { write_volatile(links.ends, None) };
+                        list.set(None);
                     }
                 }
             }
             (None, Some(mut next)) => {
                 // First in queue
                 unsafe {
-                    write_volatile(
-                        links.ends,
-                        Some(LinkedListEnds {
-                            first: next,
-                            last: read_volatile(links.ends).expect("List is not empty").last,
-                        }),
-                    );
-                    write_volatile(next.as_mut().links_mut().previous, None);
+                    let list = self.list().core.borrow(cs);
+                    list.set(Some(LinkedListCore {
+                        first: next,
+                        last: list.get().expect("List is not empty").last,
+                    }));
+                    next.as_mut().links().previous.set(cs, None);
                 }
             }
             (Some(mut previous), Some(mut next)) => {
                 // In middle of queue
-
                 unsafe {
-                    write_volatile(previous.as_mut().links_mut().next, Some(next));
-                    write_volatile(next.as_mut().links_mut().previous, Some(previous));
+                    previous.as_mut().links().next.set(cs, Some(next));
+                    next.as_mut().links().previous.set(cs, Some(previous));
                 }
             }
             (Some(mut previous), None) => {
                 // Last in queue
                 unsafe {
-                    write_volatile(
-                        links.ends,
-                        Some(LinkedListEnds {
-                            first: read_volatile(links.ends).expect("List is not empty").first,
-                            last: previous,
-                        }),
-                    );
-                    write_volatile(previous.as_mut().links_mut().next, None);
+                    let list = self.list().core.borrow(cs);
+                    list.set(Some(LinkedListCore {
+                        first: list.get().expect("List is not empty").first,
+                        last: previous,
+                    }));
+                    previous.as_mut().links().next.set(cs, None);
                 }
             }
         }
@@ -150,33 +192,42 @@ pub trait LinkedListItem {
 
 #[cfg(test)]
 mod tests {
-    use core::ptr::NonNull;
-
     use super::*;
 
+    use crate::interrupt;
+
     #[derive(Default)]
-    struct LinkedList {
-        ends: Option<LinkedListEnds<NonNull<Node>>>,
+    struct TestLinkedList<'a> {
+        list: LinkedList<Node<'a>>,
     }
 
-    impl LinkedList {
+    impl<'a> TestLinkedList<'a> {
         fn assert_is_valid(&self) {
-            unsafe {
-                if let Some(ends) = &self.ends {
-                    assert!(ends.first.as_ref().previous.is_none());
-                    assert!(ends.last.as_ref().next.is_none());
+            interrupt::free(|cs| unsafe {
+                if let Some(ends) = self.list.core.borrow(cs).get() {
+                    assert!(ends.first.as_ref().links.previous.get(cs).is_none());
+                    assert!(ends.last.as_ref().links.next.get(cs).is_none());
 
                     let mut current_node = ends.first;
 
                     loop {
-                        if let Some(previous) = current_node.as_ref().previous {
-                            let previous_next = previous.as_ref().next.expect("Node has next node");
+                        if let Some(previous) = current_node.as_ref().links.previous.get(cs) {
+                            let previous_next = previous
+                                .as_ref()
+                                .links
+                                .next
+                                .get(cs)
+                                .expect("Node has next node");
                             assert!(core::ptr::eq(current_node.as_ptr(), previous_next.as_ptr()));
                         }
 
-                        if let Some(next) = current_node.as_ref().next {
-                            let next_previous =
-                                next.as_ref().previous.expect("Node has previous node");
+                        if let Some(next) = current_node.as_ref().links.next.get(cs) {
+                            let next_previous = next
+                                .as_ref()
+                                .links
+                                .previous
+                                .get(cs)
+                                .expect("Node has previous node");
                             assert!(core::ptr::eq(current_node.as_ptr(), next_previous.as_ptr()));
 
                             current_node = next;
@@ -186,15 +237,15 @@ mod tests {
                         break;
                     }
                 }
-            }
+            })
         }
 
         fn is_empty(&self) -> bool {
-            self.ends.is_none()
+            interrupt::free(|cs| self.list.core.borrow(cs).get().is_none())
         }
 
-        fn contains(&self, node: *const Node) -> bool {
-            if let Some(ends) = &self.ends {
+        fn contains(&self, node: *const Node<'a>, cs: &CriticalSection) -> bool {
+            if let Some(ends) = self.list.core.borrow(cs).get() {
                 let mut current_node = ends.first;
 
                 loop {
@@ -202,7 +253,7 @@ mod tests {
                         return true;
                     }
 
-                    if let Some(next_node) = unsafe { current_node.as_ref().next } {
+                    if let Some(next_node) = unsafe { current_node.as_ref() }.links.next.get(cs) {
                         current_node = next_node;
                     } else {
                         return false;
@@ -214,155 +265,153 @@ mod tests {
         }
     }
 
-    struct Node {
-        list: NonNull<LinkedList>,
-        previous: Option<NonNull<Node>>,
-        next: Option<NonNull<Node>>,
+    struct Node<'a> {
+        list: &'a TestLinkedList<'a>,
+        links: LinkedListLinks<Self>,
     }
 
-    impl Node {
-        fn new(list: &LinkedList) -> Self {
+    impl<'a> Node<'a> {
+        fn new(list: &'a TestLinkedList<'a>) -> Self {
             Self {
-                list: list.into(),
-                previous: None,
-                next: None,
+                list,
+                links: LinkedListLinks::default(),
             }
         }
     }
 
-    impl LinkedListItem for Node {
-        fn links(
-            &self,
-        ) -> LinkedListLinks<
-            *const Option<NonNull<Self>>,
-            *const Option<LinkedListEnds<NonNull<Self>>>,
-        > {
-            LinkedListLinks {
-                previous: &self.previous,
-                next: &self.next,
-                ends: unsafe { &self.list.as_ref().ends },
-            }
+    impl<'a> LinkedListItem for Node<'a> {
+        fn links(&self) -> &LinkedListLinks<Self> {
+            &self.links
         }
 
-        fn links_mut(
-            &mut self,
-        ) -> LinkedListLinks<*mut Option<NonNull<Self>>, *mut Option<LinkedListEnds<NonNull<Self>>>>
-        {
-            LinkedListLinks {
-                previous: &mut self.previous,
-                next: &mut self.next,
-                ends: unsafe { &mut self.list.as_mut().ends },
-            }
+        fn list(&self) -> &LinkedList<Self> {
+            &self.list.list
         }
     }
 
     #[test]
     fn empty_list_is_valid() {
-        let list = LinkedList::default();
+        let list = TestLinkedList::default();
         list.assert_is_valid();
         assert!(list.is_empty());
     }
 
     #[test]
     fn singleton_insert_front_is_valid() {
-        let list = LinkedList::default();
+        interrupt::free(|cs| {
+            let list = TestLinkedList::default();
 
-        let mut node = Node::new(&list);
-        node.insert_front();
+            let mut node = Node::new(&list);
+            node.insert_front(cs);
 
-        list.assert_is_valid();
-        assert!(list.contains(&node));
+            list.assert_is_valid();
+            assert!(list.contains(&node, cs));
+        });
     }
 
     #[test]
     fn singleton_insert_back_is_valid() {
-        let list = LinkedList::default();
+        interrupt::free(|cs| {
+            let list = TestLinkedList::default();
 
-        let mut node = Node::new(&list);
-        node.insert_back();
+            let mut node = Node::new(&list);
+            node.insert_back(cs);
 
-        list.assert_is_valid();
-        assert!(list.contains(&node));
+            list.assert_is_valid();
+            assert!(list.contains(&node, cs));
+        });
     }
 
     #[test]
     fn list_a_b_is_valid() {
-        let list = LinkedList::default();
+        interrupt::free(|cs| {
+            let list = TestLinkedList::default();
 
-        let mut node_a = Node::new(&list);
-        let mut node_b = Node::new(&list);
+            let mut node_a = Node::new(&list);
+            let mut node_b = Node::new(&list);
 
-        node_a.insert_back();
-        node_b.insert_back();
+            node_a.insert_back(cs);
+            node_b.insert_back(cs);
 
-        list.assert_is_valid();
-        assert!(list.contains(&node_a));
-        assert!(list.contains(&node_b));
+            list.assert_is_valid();
+            assert!(list.contains(&node_a, cs));
+            assert!(list.contains(&node_b, cs));
 
-        assert!(node_a.next.is_some());
-        assert!(core::ptr::eq(node_a.next.unwrap().as_ptr(), &node_b));
+            assert!(node_a.links.next.get(cs).is_some());
+            assert!(core::ptr::eq(
+                node_a.links.next.get(cs).unwrap().as_ptr(),
+                &node_b
+            ));
+        });
     }
 
     #[test]
     fn list_b_a_is_valid() {
-        let list = LinkedList::default();
+        interrupt::free(|cs| {
+            let list = TestLinkedList::default();
 
-        let mut node_a = Node::new(&list);
-        let mut node_b = Node::new(&list);
+            let mut node_a = Node::new(&list);
+            let mut node_b = Node::new(&list);
 
-        node_a.insert_front();
-        node_b.insert_front();
+            node_a.insert_front(cs);
+            node_b.insert_front(cs);
 
-        list.assert_is_valid();
-        assert!(list.contains(&node_a));
-        assert!(list.contains(&node_b));
+            list.assert_is_valid();
+            assert!(list.contains(&node_a, cs));
+            assert!(list.contains(&node_b, cs));
 
-        assert!(node_b.next.is_some());
-        assert!(core::ptr::eq(node_b.next.unwrap().as_ptr(), &node_a));
+            assert!(node_b.links.next.get(cs).is_some());
+            assert!(core::ptr::eq(
+                node_b.links.next.get(cs).unwrap().as_ptr(),
+                &node_a
+            ));
+        });
     }
 
     fn run_triple_test(remove_order: [usize; 3]) {
-        let list = LinkedList::default();
+        interrupt::free(|cs| {
+            let list = TestLinkedList::default();
 
-        let mut nodes = [Node::new(&list), Node::new(&list), Node::new(&list)];
+            let mut nodes = [Node::new(&list), Node::new(&list), Node::new(&list)];
 
-        for node in nodes.iter_mut() {
-            node.insert_back();
-        }
+            for node in nodes.iter_mut() {
+                node.insert_back(cs);
+            }
 
-        for node in nodes.iter_mut() {
-            assert!(list.contains(node));
-        }
+            for node in nodes.iter_mut() {
+                assert!(list.contains(node, cs));
+            }
 
-        nodes[remove_order[0]].remove();
+            nodes[remove_order[0]].remove(cs);
 
-        assert!(!list.contains(&nodes[remove_order[0]]));
-        assert!(list.contains(&nodes[remove_order[1]]));
-        assert!(list.contains(&nodes[remove_order[2]]));
+            assert!(!list.contains(&nodes[remove_order[0]], cs));
+            assert!(list.contains(&nodes[remove_order[1]], cs));
+            assert!(list.contains(&nodes[remove_order[2]], cs));
 
-        assert!(!nodes[remove_order[0]].is_in_queue());
-        assert!(nodes[remove_order[1]].is_in_queue());
-        assert!(nodes[remove_order[2]].is_in_queue());
+            assert!(!nodes[remove_order[0]].is_in_queue(cs));
+            assert!(nodes[remove_order[1]].is_in_queue(cs));
+            assert!(nodes[remove_order[2]].is_in_queue(cs));
 
-        nodes[remove_order[1]].remove();
+            nodes[remove_order[1]].remove(cs);
 
-        assert!(!list.contains(&nodes[remove_order[0]]));
-        assert!(!list.contains(&nodes[remove_order[1]]));
-        assert!(list.contains(&nodes[remove_order[2]]));
+            assert!(!list.contains(&nodes[remove_order[0]], cs));
+            assert!(!list.contains(&nodes[remove_order[1]], cs));
+            assert!(list.contains(&nodes[remove_order[2]], cs));
 
-        assert!(!nodes[remove_order[0]].is_in_queue());
-        assert!(!nodes[remove_order[1]].is_in_queue());
-        assert!(nodes[remove_order[2]].is_in_queue());
+            assert!(!nodes[remove_order[0]].is_in_queue(cs));
+            assert!(!nodes[remove_order[1]].is_in_queue(cs));
+            assert!(nodes[remove_order[2]].is_in_queue(cs));
 
-        nodes[remove_order[2]].remove();
+            nodes[remove_order[2]].remove(cs);
 
-        assert!(!list.contains(&nodes[remove_order[0]]));
-        assert!(!list.contains(&nodes[remove_order[1]]));
-        assert!(!list.contains(&nodes[remove_order[2]]));
+            assert!(!list.contains(&nodes[remove_order[0]], cs));
+            assert!(!list.contains(&nodes[remove_order[1]], cs));
+            assert!(!list.contains(&nodes[remove_order[2]], cs));
 
-        assert!(!nodes[remove_order[0]].is_in_queue());
-        assert!(!nodes[remove_order[1]].is_in_queue());
-        assert!(!nodes[remove_order[2]].is_in_queue());
+            assert!(!nodes[remove_order[0]].is_in_queue(cs));
+            assert!(!nodes[remove_order[1]].is_in_queue(cs));
+            assert!(!nodes[remove_order[2]].is_in_queue(cs));
+        });
     }
 
     #[test]
