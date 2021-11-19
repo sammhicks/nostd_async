@@ -1,7 +1,6 @@
-use core::cell::Cell;
-use core::ptr::NonNull;
-
 use bare_metal::{CriticalSection, Mutex};
+
+use crate::{cell::Cell, non_null::NonNull};
 
 struct LinkedListLink<T>(Mutex<Cell<Option<NonNull<T>>>>);
 
@@ -62,12 +61,12 @@ pub struct LinkedList<T> {
 impl<T> LinkedList<T> {
     pub fn with_first<F, R>(&self, cs: &CriticalSection, f: F) -> Option<R>
     where
-        F: FnOnce(&mut T) -> R,
+        F: FnOnce(&T) -> R,
     {
         self.core
             .borrow(cs)
             .get()
-            .map(|mut core| f(unsafe { core.first.as_mut() }))
+            .map(|core| f(unsafe { core.first.as_ref() }))
     }
 }
 
@@ -96,19 +95,22 @@ pub trait LinkedListItem: Sized {
                 .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
-    fn insert_front(&mut self, cs: &CriticalSection) {
+    fn insert_front(&self, cs: &CriticalSection) {
         if self.is_in_queue(cs) {
             return;
         }
 
-        let self_ptr = NonNull::from(self as &Self);
+        let self_ptr = NonNull::new(self);
 
         let list = self.list().core.borrow(cs);
 
         match list.get() {
             Some(mut core) => {
                 self.links().next.set(cs, Some(core.first));
-                unsafe { core.first.as_ref().links().previous.set(cs, Some(self_ptr)) };
+                unsafe { core.first.as_ref() }
+                    .links()
+                    .previous
+                    .set(cs, Some(self_ptr));
                 core.first = self_ptr;
                 list.set(Some(core));
             }
@@ -119,19 +121,22 @@ pub trait LinkedListItem: Sized {
         }
     }
 
-    fn insert_back(&mut self, cs: &CriticalSection) {
+    fn insert_back(&self, cs: &CriticalSection) {
         if self.is_in_queue(cs) {
             return;
         }
 
-        let self_ptr = NonNull::from(self as &Self);
+        let self_ptr = NonNull::new(self);
 
         let list = self.list().core.borrow(cs);
 
         match list.get() {
             Some(mut core) => {
                 self.links().previous.set(cs, Some(core.last));
-                unsafe { core.last.as_ref().links().next.set(cs, Some(self_ptr)) };
+                unsafe { core.last.as_ref() }
+                    .links()
+                    .next
+                    .set(cs, Some(self_ptr));
                 core.last = self_ptr;
                 list.set(Some(core));
             }
@@ -142,7 +147,7 @@ pub trait LinkedListItem: Sized {
         }
     }
 
-    fn remove(&mut self, cs: &CriticalSection) {
+    fn remove(&self, cs: &CriticalSection) {
         let self_ptr = self as *const Self;
 
         let links = self.links();
@@ -157,7 +162,7 @@ pub trait LinkedListItem: Sized {
                     }
                 }
             }
-            (None, Some(mut next)) => {
+            (None, Some(next)) => {
                 // First in queue
                 unsafe {
                     let list = self.list().core.borrow(cs);
@@ -165,17 +170,17 @@ pub trait LinkedListItem: Sized {
                         first: next,
                         last: list.get().expect("List is not empty").last,
                     }));
-                    next.as_mut().links().previous.set(cs, None);
+                    next.as_ref().links().previous.set(cs, None);
                 }
             }
-            (Some(mut previous), Some(mut next)) => {
+            (Some(previous), Some(next)) => {
                 // In middle of queue
                 unsafe {
-                    previous.as_mut().links().next.set(cs, Some(next));
-                    next.as_mut().links().previous.set(cs, Some(previous));
+                    previous.as_ref().links().next.set(cs, Some(next));
+                    next.as_ref().links().previous.set(cs, Some(previous));
                 }
             }
-            (Some(mut previous), None) => {
+            (Some(previous), None) => {
                 // Last in queue
                 unsafe {
                     let list = self.list().core.borrow(cs);
@@ -183,7 +188,7 @@ pub trait LinkedListItem: Sized {
                         first: list.get().expect("List is not empty").first,
                         last: previous,
                     }));
-                    previous.as_mut().links().next.set(cs, None);
+                    previous.as_ref().links().next.set(cs, None);
                 }
             }
         }
@@ -301,7 +306,7 @@ mod tests {
         interrupt::free(|cs| {
             let list = TestLinkedList::default();
 
-            let mut node = Node::new(&list);
+            let node = Node::new(&list);
             node.insert_front(cs);
 
             list.assert_is_valid();
@@ -314,7 +319,7 @@ mod tests {
         interrupt::free(|cs| {
             let list = TestLinkedList::default();
 
-            let mut node = Node::new(&list);
+            let node = Node::new(&list);
             node.insert_back(cs);
 
             list.assert_is_valid();
@@ -327,8 +332,8 @@ mod tests {
         interrupt::free(|cs| {
             let list = TestLinkedList::default();
 
-            let mut node_a = Node::new(&list);
-            let mut node_b = Node::new(&list);
+            let node_a = Node::new(&list);
+            let node_b = Node::new(&list);
 
             node_a.insert_back(cs);
             node_b.insert_back(cs);
@@ -350,8 +355,8 @@ mod tests {
         interrupt::free(|cs| {
             let list = TestLinkedList::default();
 
-            let mut node_a = Node::new(&list);
-            let mut node_b = Node::new(&list);
+            let node_a = Node::new(&list);
+            let node_b = Node::new(&list);
 
             node_a.insert_front(cs);
             node_b.insert_front(cs);

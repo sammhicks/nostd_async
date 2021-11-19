@@ -16,8 +16,10 @@
 //! ```
 //! See more examples in the [examples directory](https://github.com/sammhicks/nostd_async/tree/master/examples)
 
+mod cell;
 mod interrupt;
 mod linked_list;
+mod non_null;
 pub mod sync;
 mod task;
 

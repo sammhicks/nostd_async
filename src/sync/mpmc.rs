@@ -1,14 +1,13 @@
 use core::{
-    cell::{Cell, RefCell},
     future::Future,
     pin::Pin,
-    ptr::NonNull,
     task::{Context, Poll, Waker},
 };
 
 use bare_metal::Mutex;
 
 use crate::{
+    cell::Cell,
     interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
 };
@@ -51,8 +50,8 @@ pub struct Sender<'b, T> {
 impl<'b, T> Sender<'b, T> {
     pub fn send(&self, value: T) -> Send<'b, T> {
         Send {
-            buffer: NonNull::from(self.buffer),
-            value: Mutex::new(RefCell::new(Some(value))),
+            buffer: self.buffer,
+            value: Mutex::new(Cell::new(Some(value))),
             waker: Mutex::new(Cell::new(None)),
             links: LinkedListLinks::default(),
         }
@@ -60,8 +59,8 @@ impl<'b, T> Sender<'b, T> {
 }
 
 pub struct Send<'b, T> {
-    buffer: NonNull<Buffer<'b, T>>,
-    value: Mutex<RefCell<Option<T>>>,
+    buffer: &'b Buffer<'b, T>,
+    value: Mutex<Cell<Option<T>>>,
     waker: Mutex<Cell<Option<Waker>>>,
     links: LinkedListLinks<Self>,
 }
@@ -72,7 +71,7 @@ impl<'b, T> LinkedListItem for Send<'b, T> {
     }
 
     fn list(&self) -> &LinkedList<Self> {
-        &unsafe { self.buffer.as_ref() }.senders
+        &self.buffer.senders
     }
 }
 
@@ -83,7 +82,7 @@ impl<'b, T> Future for Send<'b, T> {
         interrupt::free(|cs| {
             let this = unsafe { self.get_unchecked_mut() };
 
-            if this.value.borrow(cs).borrow().is_none() {
+            if this.value.borrow(cs).has_none() {
                 this.remove(cs);
                 Poll::Ready(())
             } else {
@@ -91,13 +90,11 @@ impl<'b, T> Future for Send<'b, T> {
 
                 this.waker.borrow(cs).set(Some(cx.waker().clone()));
 
-                unsafe { this.buffer.as_mut() }
-                    .receivers
-                    .with_first(cs, |receiver| {
-                        if let Some(waker) = receiver.waker.borrow(cs).take() {
-                            waker.wake();
-                        }
-                    });
+                this.buffer.receivers.with_first(cs, |receiver| {
+                    if let Some(waker) = receiver.waker.borrow(cs).take() {
+                        waker.wake();
+                    }
+                });
                 Poll::Pending
             }
         })
@@ -117,7 +114,7 @@ pub struct Receiver<'b, T> {
 impl<'b, T> Receiver<'b, T> {
     pub fn receive(&self) -> Receive<'b, T> {
         Receive {
-            buffer: NonNull::from(self.buffer),
+            buffer: self.buffer,
             waker: Mutex::new(Cell::new(None)),
             links: LinkedListLinks::default(),
         }
@@ -125,7 +122,7 @@ impl<'b, T> Receiver<'b, T> {
 }
 
 pub struct Receive<'b, T> {
-    buffer: NonNull<Buffer<'b, T>>,
+    buffer: &'b Buffer<'b, T>,
     waker: Mutex<Cell<Option<Waker>>>,
     links: LinkedListLinks<Self>,
 }
@@ -136,7 +133,7 @@ impl<'b, T> LinkedListItem for Receive<'b, T> {
     }
 
     fn list(&self) -> &LinkedList<Self> {
-        &unsafe { self.buffer.as_ref() }.receivers
+        &self.buffer.receivers
     }
 }
 
@@ -146,20 +143,15 @@ impl<'b, T> Future for Receive<'b, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         interrupt::free(|cs| {
             let this = unsafe { self.get_unchecked_mut() };
-            let buffer = unsafe { this.buffer.as_mut() };
-            match buffer.senders.with_first(cs, |sender| {
+            match this.buffer.senders.with_first(cs, |sender| {
                 sender.remove(cs);
                 sender
                     .waker
                     .borrow(cs)
-                    .replace(None)
+                    .take()
                     .expect("Sender has waker")
                     .wake();
-                sender
-                    .value
-                    .borrow(cs)
-                    .replace(None)
-                    .expect("Sender has value")
+                sender.value.borrow(cs).take().expect("Sender has value")
             }) {
                 Some(value) => {
                     this.remove(cs);
