@@ -1,6 +1,5 @@
 use core::{
     future::Future,
-    marker::PhantomData,
     pin::Pin,
     task::{Context, RawWaker, RawWakerVTable, Waker},
 };
@@ -69,12 +68,12 @@ impl LinkedListItem for TaskCore {
 /// A joinable handle for a task.
 ///
 /// The task is aborted if the handle is dropped.
-pub struct JoinHandle<'r, T> {
-    task_core: &'r TaskCore,
-    result: &'r mut Option<T>,
+pub struct JoinHandle<'a, T> {
+    task_core: &'a TaskCore,
+    result: &'a mut Option<T>,
 }
 
-impl<'t, T> JoinHandle<'t, T> {
+impl<'a, T> JoinHandle<'a, T> {
     /// Drive the runtime until the handle's task completes.
     ///
     /// Returns the value returned by the future
@@ -86,7 +85,7 @@ impl<'t, T> JoinHandle<'t, T> {
     }
 }
 
-impl<'t, T> Drop for JoinHandle<'t, T> {
+impl<'a, T> Drop for JoinHandle<'a, T> {
     fn drop(&mut self) {
         interrupt::free(|cs| self.task_core.remove(cs));
     }
@@ -111,34 +110,40 @@ impl<F: Future> Future for CapturingFuture<F> {
 }
 
 /// An asyncronous task
-pub struct Task<'t, F: Future<Output = T> + 't, T: 't> {
+pub struct Task<F: Future> {
     core: Option<TaskCore>,
-    future: CapturingFuture<F>,
-    _phantom: PhantomData<&'t T>,
+    future: Option<CapturingFuture<F>>,
 }
 
-impl<'t, F: Future<Output = T> + 't, T: 't> Task<'t, F, T> {
+impl<'a, F> Task<F>
+where
+    F: Future + 'a,
+    F::Output: 'a,
+{
     /// Create a new task from a future
     pub fn new(future: F) -> Self {
         Self {
             core: None,
-            future: CapturingFuture {
+            future: Some(CapturingFuture {
                 future,
                 result: None,
-            },
-            _phantom: PhantomData,
+            }),
         }
     }
 
     /// Spawn the task into the given runtime.
     /// Note that the task will not be run until a join handle is joined.
-    pub fn spawn(&'t mut self, runtime: &'t Runtime) -> JoinHandle<'t, T> {
+    pub fn spawn(&'a mut self, runtime: &'a Runtime) -> JoinHandle<'a, F::Output> {
         if self.core.is_some() {
             panic!("Task already spawned");
         }
+
+        // self.future is only None on drop, so this is safe
+        let capturing_future = self.future.as_mut().unwrap();
+
         let future = Cell::new(Some(unsafe {
             core::mem::transmute::<_, *mut dyn Future<Output = ()>>(
-                &mut self.future as *mut dyn Future<Output = ()>,
+                capturing_future as *mut dyn Future<Output = ()>,
             )
         }));
 
@@ -154,8 +159,20 @@ impl<'t, F: Future<Output = T> + 't, T: 't> Task<'t, F, T> {
 
         JoinHandle {
             task_core,
-            result: &mut self.future.result,
+            result: &mut capturing_future.result,
         }
+    }
+}
+
+impl<F: Future> core::ops::Drop for Task<F> {
+    fn drop(&mut self) {
+        interrupt::free(|cs| {
+            self.future = None;
+
+            if let Some(core) = self.core.take() {
+                core.remove(cs);
+            }
+        })
     }
 }
 

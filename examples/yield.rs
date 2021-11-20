@@ -3,7 +3,7 @@ use core::future::Future;
 fn task(
     task_index: usize,
     sections_count: usize,
-) -> nostd_async::Task<'static, impl Future<Output = usize>, usize> {
+) -> nostd_async::Task<impl Future<Output = usize>> {
     nostd_async::Task::new(async move {
         for section_index in 1..=sections_count {
             println!("Task {} Section {}", task_index, section_index);
