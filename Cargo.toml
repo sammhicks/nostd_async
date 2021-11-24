@@ -20,7 +20,7 @@ cortex_m = ["cortex-m"]
 
 [dependencies]
 bare-metal = "0.2"
-cortex-m = { version = "0.6", optional = true }
+cortex-m = { version = "0.7", optional = true }
 
 [dev-dependencies]
-futures-micro = "0.4"
+futures-micro = "0.5"
