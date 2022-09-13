@@ -17,6 +17,7 @@ categories = ["asynchronous", "embedded", "no-std"]
 
 [features]
 cortex_m = ["cortex-m"]
+wfe = ["cortex-m"]
 
 [dependencies]
 bare-metal = "0.2"

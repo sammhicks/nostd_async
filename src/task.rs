@@ -197,10 +197,10 @@ impl Runtime {
                 .with_first(cs, |first| first.run_once(cs))
                 .is_none()
             {
-                #[cfg(feature = "cortex_m")]
-                {
-                    cortex_m::asm::wfi();
-                }
+                #[cfg(all(feature = "cortex_m", not(feature = "wfe")))]
+                cortex_m::asm::wfi();
+                #[cfg(all(feature = "cortex_m", feature = "wfe"))]
+                cortex_m::asm::wfe();
             }
         });
     }
