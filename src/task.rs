@@ -1,4 +1,5 @@
 use core::{
+    cell::UnsafeCell,
     future::Future,
     pin::Pin,
     task::{Context, RawWaker, RawWakerVTable, Waker},
@@ -7,7 +8,7 @@ use core::{
 use bare_metal::CriticalSection;
 
 use crate::{
-    cell::Cell,
+    cell::Mutex,
     interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
     non_null::NonNull,
@@ -32,24 +33,30 @@ unsafe fn waker_drop(_context: *const ()) {}
 static RAW_WAKER_VTABLE: RawWakerVTable =
     RawWakerVTable::new(waker_clone, waker_wake, waker_wake_by_ref, waker_drop);
 
+trait TaskHandle {
+    fn poll_task(&self, cx: &mut Context) -> core::task::Poll<()>;
+}
+
 struct TaskCore {
     runtime: NonNull<Runtime>,
-    future: Cell<Option<*mut dyn Future<Output = ()>>>,
+    task_handle: Mutex<Option<core::ptr::NonNull<dyn TaskHandle>>>,
     links: LinkedListLinks<Self>,
 }
 
 impl TaskCore {
     fn run_once(&self, cs: &CriticalSection) {
-        if let Some(future_ptr) = self.future.take() {
+        if let Some(mut task_handle) = self.task_handle.take(cs) {
             self.remove(cs);
 
-            let future = unsafe { Pin::new_unchecked(&mut *future_ptr) };
             let data = self as *const Self as *const ();
             let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
             let mut cx = Context::from_waker(&waker);
 
-            if !future.poll(&mut cx).is_ready() {
-                self.future.set(Some(future_ptr));
+            if unsafe { task_handle.as_mut() }
+                .poll_task(&mut cx)
+                .is_pending()
+            {
+                self.task_handle.set(cs, Some(task_handle));
             }
         }
     }
@@ -70,7 +77,7 @@ impl LinkedListItem for TaskCore {
 /// The task is aborted if the handle is dropped.
 pub struct JoinHandle<'a, T> {
     task_core: &'a TaskCore,
-    result: &'a mut Option<T>,
+    result: &'a Mutex<Option<T>>,
 }
 
 impl<'a, T> JoinHandle<'a, T> {
@@ -78,10 +85,11 @@ impl<'a, T> JoinHandle<'a, T> {
     ///
     /// Returns the value returned by the future
     pub fn join(self) -> T {
-        while self.task_core.future.has_some() {
+        while interrupt::free(|cs| self.task_core.task_handle.has_some(cs)) {
             unsafe { self.task_core.runtime.as_ref().run_once() };
         }
-        self.result.take().expect("No Result")
+
+        interrupt::free(|cs| self.result.take(cs).expect("No Result"))
     }
 }
 
@@ -92,27 +100,22 @@ impl<'a, T> Drop for JoinHandle<'a, T> {
 }
 
 struct CapturingFuture<F: Future> {
-    future: F,
-    result: Option<F::Output>,
+    future: UnsafeCell<F>,
+    result: Mutex<Option<F::Output>>,
 }
 
-impl<F: Future> Future for CapturingFuture<F> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> core::task::Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-        let future = unsafe { Pin::new_unchecked(&mut this.future) };
-        let result = &mut this.result;
-        future.poll(cx).map(|value| {
-            *result = Some(value);
-        })
+impl<F: Future> TaskHandle for CapturingFuture<F> {
+    fn poll_task(&self, cx: &mut Context<'_>) -> core::task::Poll<()> {
+        unsafe { Pin::new_unchecked(&mut *self.future.get()) }
+            .poll(cx)
+            .map(|output| interrupt::free(|cs| self.result.set(cs, Some(output))))
     }
 }
 
 /// An asyncronous task
 pub struct Task<F: Future> {
     core: Option<TaskCore>,
-    future: Option<CapturingFuture<F>>,
+    future: CapturingFuture<F>,
 }
 
 impl<'a, F> Task<F>
@@ -124,10 +127,10 @@ where
     pub fn new(future: F) -> Self {
         Self {
             core: None,
-            future: Some(CapturingFuture {
-                future,
-                result: None,
-            }),
+            future: CapturingFuture {
+                future: UnsafeCell::new(future),
+                result: Mutex::new(None),
+            },
         }
     }
 
@@ -138,28 +141,28 @@ where
             panic!("Task already spawned");
         }
 
-        // self.future is only None on drop, so this is safe
-        let capturing_future = self.future.as_mut().unwrap();
+        let future = unsafe {
+            Mutex::new(Some(core::ptr::NonNull::from(core::mem::transmute::<
+                &mut (dyn TaskHandle + 'a),
+                &mut dyn TaskHandle,
+            >(
+                &mut self.future
+            ))))
+        };
 
-        let future = Cell::new(Some(unsafe {
-            core::mem::transmute::<_, *mut dyn Future<Output = ()>>(
-                capturing_future as *mut dyn Future<Output = ()>,
-            )
-        }));
+        let task_core = {
+            let task_core = self.core.get_or_insert(TaskCore {
+                task_handle: future,
+                runtime: NonNull::new(runtime),
+                links: LinkedListLinks::default(),
+            });
 
-        self.core = Some(TaskCore {
-            future,
-            runtime: NonNull::new(runtime),
-            links: LinkedListLinks::default(),
-        });
-
-        let task_core = self.core.as_ref().unwrap();
-
-        interrupt::free(|cs| task_core.insert_back(cs));
+            interrupt::free(move |cs| task_core.insert_back(cs))
+        };
 
         JoinHandle {
             task_core,
-            result: &mut capturing_future.result,
+            result: &self.future.result,
         }
     }
 }
@@ -167,8 +170,6 @@ where
 impl<F: Future> core::ops::Drop for Task<F> {
     fn drop(&mut self) {
         interrupt::free(|cs| {
-            self.future = None;
-
             if let Some(core) = self.core.take() {
                 core.remove(cs);
             }

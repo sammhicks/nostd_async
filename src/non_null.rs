@@ -5,7 +5,7 @@ pub struct NonNull<T>(core::ptr::NonNull<T>);
 
 impl<T> Clone for NonNull<T> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 

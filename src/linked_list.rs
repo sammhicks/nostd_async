@@ -1,26 +1,26 @@
-use bare_metal::{CriticalSection, Mutex};
+use bare_metal::CriticalSection;
 
-use crate::{cell::Cell, non_null::NonNull};
+use crate::{cell::Mutex, non_null::NonNull};
 
-struct LinkedListLink<T>(Mutex<Cell<Option<NonNull<T>>>>);
+struct LinkedListLink<T>(Mutex<Option<NonNull<T>>>);
 
 impl<T> LinkedListLink<T> {
     fn get(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
-        self.0.borrow(cs).get()
+        self.0.get(cs)
     }
 
     fn set(&self, cs: &CriticalSection, value: Option<NonNull<T>>) {
-        self.0.borrow(cs).set(value)
+        self.0.set(cs, value)
     }
 
     fn take(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
-        self.0.borrow(cs).take()
+        self.0.take(cs)
     }
 }
 
 impl<T> Default for LinkedListLink<T> {
     fn default() -> Self {
-        Self(Mutex::new(Cell::new(None)))
+        Self(Mutex::default())
     }
 }
 
@@ -45,17 +45,14 @@ struct LinkedListCore<T> {
 
 impl<T> Clone for LinkedListCore<T> {
     fn clone(&self) -> Self {
-        Self {
-            first: self.first,
-            last: self.last,
-        }
+        *self
     }
 }
 
 impl<T> Copy for LinkedListCore<T> {}
 
 pub struct LinkedList<T> {
-    core: Mutex<Cell<Option<LinkedListCore<T>>>>,
+    core: Mutex<Option<LinkedListCore<T>>>,
 }
 
 impl<T> LinkedList<T> {
@@ -64,8 +61,7 @@ impl<T> LinkedList<T> {
         F: FnOnce(&T) -> R,
     {
         self.core
-            .borrow(cs)
-            .get()
+            .get(cs)
             .map(|core| f(unsafe { core.first.as_ref() }))
     }
 }
@@ -73,7 +69,7 @@ impl<T> LinkedList<T> {
 impl<T> Default for LinkedList<T> {
     fn default() -> Self {
         Self {
-            core: Mutex::new(Cell::new(None)),
+            core: Mutex::default(),
         }
     }
 }
@@ -90,110 +86,126 @@ pub trait LinkedListItem: Sized {
             || self
                 .list()
                 .core
-                .borrow(cs)
-                .get()
+                .get(cs)
                 .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
-    fn insert_front(&self, cs: &CriticalSection) {
+    fn insert_front(&self, cs: &CriticalSection) -> &Self {
         if self.is_in_queue(cs) {
-            return;
+            return self;
         }
 
         let self_ptr = NonNull::new(self);
 
-        let list = self.list().core.borrow(cs);
+        let list = &self.list().core;
 
-        match list.get() {
+        match list.get(cs) {
             Some(mut core) => {
-                self.links().next.set(cs, Some(core.first));
-                unsafe { core.first.as_ref() }
-                    .links()
-                    .previous
-                    .set(cs, Some(self_ptr));
+                self.set_next(cs, Some(core.first));
+                unsafe { core.first.as_ref() }.set_previous(cs, Some(self_ptr));
                 core.first = self_ptr;
-                list.set(Some(core));
+                list.set(cs, Some(core));
             }
-            None => list.set(Some(LinkedListCore {
-                first: self_ptr,
-                last: self_ptr,
-            })),
+            None => list.set(
+                cs,
+                Some(LinkedListCore {
+                    first: self_ptr,
+                    last: self_ptr,
+                }),
+            ),
         }
+
+        self
     }
 
-    fn insert_back(&self, cs: &CriticalSection) {
+    fn insert_back(&self, cs: &CriticalSection) -> &Self {
         if self.is_in_queue(cs) {
-            return;
+            return self;
         }
 
         let self_ptr = NonNull::new(self);
 
-        let list = self.list().core.borrow(cs);
+        let list = &self.list().core;
 
-        match list.get() {
+        match list.get(cs) {
             Some(mut core) => {
-                self.links().previous.set(cs, Some(core.last));
-                unsafe { core.last.as_ref() }
-                    .links()
-                    .next
-                    .set(cs, Some(self_ptr));
+                self.set_previous(cs, Some(core.last));
+                unsafe { core.last.as_ref() }.set_next(cs, Some(self_ptr));
                 core.last = self_ptr;
-                list.set(Some(core));
+                list.set(cs, Some(core));
             }
-            None => list.set(Some(LinkedListCore {
-                first: self_ptr,
-                last: self_ptr,
-            })),
+            None => list.set(
+                cs,
+                Some(LinkedListCore {
+                    first: self_ptr,
+                    last: self_ptr,
+                }),
+            ),
         }
+
+        self
     }
 
     fn remove(&self, cs: &CriticalSection) {
         let self_ptr = self as *const Self;
 
         let links = self.links();
-        let list = self.list().core.borrow(cs);
+        let list = &self.list().core;
 
         match (links.previous.take(cs), links.next.take(cs)) {
             (None, None) => {
                 // Possible not queued
-                if let Some(ends) = list.get() {
+                if let Some(ends) = list.get(cs) {
                     if core::ptr::eq(ends.first.as_ptr(), self_ptr) {
-                        list.set(None);
+                        list.set(cs, None);
                     }
                 }
             }
             (None, Some(next)) => {
                 // First in queue
-                unsafe {
-                    let list = self.list().core.borrow(cs);
-                    list.set(Some(LinkedListCore {
+                let list = &self.list().core;
+                list.set(
+                    cs,
+                    Some(LinkedListCore {
                         first: next,
-                        last: list.get().expect("List is not empty").last,
-                    }));
-                    next.as_ref().links().previous.set(cs, None);
-                }
+                        last: list.get(cs).expect("List is not empty").last,
+                    }),
+                );
+                unsafe { next.as_ref() }.set_previous(cs, None);
             }
             (Some(previous), Some(next)) => {
                 // In middle of queue
-                unsafe {
-                    previous.as_ref().links().next.set(cs, Some(next));
-                    next.as_ref().links().previous.set(cs, Some(previous));
-                }
+                unsafe { previous.as_ref() }.set_next(cs, Some(next));
+                unsafe { next.as_ref() }.set_previous(cs, Some(previous));
             }
             (Some(previous), None) => {
                 // Last in queue
-                unsafe {
-                    let list = self.list().core.borrow(cs);
-                    list.set(Some(LinkedListCore {
-                        first: list.get().expect("List is not empty").first,
+
+                let list = &self.list().core;
+                list.set(
+                    cs,
+                    Some(LinkedListCore {
+                        first: list.get(cs).expect("List is not empty").first,
                         last: previous,
-                    }));
-                    previous.as_ref().links().next.set(cs, None);
-                }
+                    }),
+                );
+                unsafe { previous.as_ref() }.set_next(cs, None);
             }
         }
     }
 }
+
+trait LinkedListItemUtil: LinkedListItem {
+    fn set_previous(&self, cs: &CriticalSection, previous: Option<NonNull<Self>>) {
+        self.links().previous.set(cs, previous);
+    }
+
+    fn set_next(&self, cs: &CriticalSection, next: Option<NonNull<Self>>) {
+        self.links().next.set(cs, next);
+    }
+}
+
+impl<T: LinkedListItem> LinkedListItemUtil for T {}
 
 #[cfg(test)]
 mod tests {
@@ -209,7 +221,7 @@ mod tests {
     impl<'a> TestLinkedList<'a> {
         fn assert_is_valid(&self) {
             interrupt::free(|cs| unsafe {
-                if let Some(ends) = self.list.core.borrow(cs).get() {
+                if let Some(ends) = self.list.core.get(cs) {
                     assert!(ends.first.as_ref().links.previous.get(cs).is_none());
                     assert!(ends.last.as_ref().links.next.get(cs).is_none());
 
@@ -246,11 +258,11 @@ mod tests {
         }
 
         fn is_empty(&self) -> bool {
-            interrupt::free(|cs| self.list.core.borrow(cs).get().is_none())
+            interrupt::free(|cs| self.list.core.get(cs).is_none())
         }
 
         fn contains(&self, node: *const Node<'a>, cs: &CriticalSection) -> bool {
-            if let Some(ends) = self.list.core.borrow(cs).get() {
+            if let Some(ends) = self.list.core.get(cs) {
                 let mut current_node = ends.first;
 
                 loop {
@@ -383,7 +395,7 @@ mod tests {
                 node.insert_back(cs);
             }
 
-            for node in nodes.iter_mut() {
+            for node in nodes.iter() {
                 assert!(list.contains(node, cs));
             }
 
