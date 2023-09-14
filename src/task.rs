@@ -6,7 +6,6 @@ use core::{
 };
 
 use crate::{
-    interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
     mutex::Mutex,
     non_null::NonNull,
@@ -18,12 +17,12 @@ unsafe fn waker_clone(context: *const ()) -> RawWaker {
 
 unsafe fn waker_wake(context: *const ()) {
     let task = &*(context as *const TaskCore);
-    interrupt::free(|cs| task.insert_back(cs));
+    critical_section::with(|cs| task.insert_back(cs));
 }
 
 unsafe fn waker_wake_by_ref(context: *const ()) {
     let task = &*(context as *const TaskCore);
-    interrupt::free(|cs| task.insert_back(cs));
+    critical_section::with(|cs| task.insert_back(cs));
 }
 
 unsafe fn waker_drop(_context: *const ()) {}
@@ -43,7 +42,7 @@ struct TaskCore {
 
 impl TaskCore {
     fn run_once(&self) {
-        if let Some(mut task_handle) = interrupt::free(|cs| self.task_handle.take(cs)) {
+        if let Some(mut task_handle) = critical_section::with(|cs| self.task_handle.take(cs)) {
             let data = self as *const Self as *const ();
             let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
             let mut cx = Context::from_waker(&waker);
@@ -52,7 +51,7 @@ impl TaskCore {
                 .poll_task(&mut cx)
                 .is_pending()
             {
-                interrupt::free(|cs| self.task_handle.set(cs, Some(task_handle)));
+                critical_section::with(|cs| self.task_handle.set(cs, Some(task_handle)));
             }
         }
     }
@@ -81,17 +80,17 @@ impl<'a, T> JoinHandle<'a, T> {
     ///
     /// Returns the value returned by the future
     pub fn join(self) -> T {
-        while interrupt::free(|cs| self.task_core.task_handle.has_some(cs)) {
+        while critical_section::with(|cs| self.task_core.task_handle.has_some(cs)) {
             unsafe { self.task_core.runtime.as_ref().run_once() };
         }
 
-        interrupt::free(|cs| self.result.take(cs).expect("No Result"))
+        critical_section::with(|cs| self.result.take(cs).expect("No Result"))
     }
 }
 
 impl<'a, T> Drop for JoinHandle<'a, T> {
     fn drop(&mut self) {
-        interrupt::free(|cs| self.task_core.remove(cs));
+        critical_section::with(|cs| self.task_core.remove(cs));
     }
 }
 
@@ -104,7 +103,7 @@ impl<F: Future> TaskHandle for CapturingFuture<F> {
     fn poll_task(&self, cx: &mut Context<'_>) -> core::task::Poll<()> {
         unsafe { Pin::new_unchecked(&mut *self.future.get()) }
             .poll(cx)
-            .map(|output| interrupt::free(|cs| self.result.set(cs, Some(output))))
+            .map(|output| critical_section::with(|cs| self.result.set(cs, Some(output))))
     }
 }
 
@@ -153,7 +152,7 @@ where
                 links: LinkedListLinks::default(),
             });
 
-            interrupt::free(move |cs| task_core.insert_back(cs))
+            critical_section::with(move |cs| task_core.insert_back(cs))
         };
 
         JoinHandle {
@@ -165,7 +164,7 @@ where
 
 impl<F: Future> core::ops::Drop for Task<F> {
     fn drop(&mut self) {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             if let Some(core) = self.core.take() {
                 core.remove(cs);
             }
@@ -188,7 +187,7 @@ impl Runtime {
     }
 
     unsafe fn run_once(&self) {
-        if let Some(first_task) = interrupt::free(|cs| self.tasks.pop_first(cs)) {
+        if let Some(first_task) = critical_section::with(|cs| self.tasks.pop_first(cs)) {
             first_task.run_once();
         } else {
             #[cfg(all(feature = "cortex_m", not(feature = "wfe")))]

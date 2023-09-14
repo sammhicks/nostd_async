@@ -1,19 +1,19 @@
-use bare_metal::CriticalSection;
+use critical_section::CriticalSection;
 
 use crate::{mutex::Mutex, non_null::NonNull};
 
 struct LinkedListLink<T>(Mutex<Option<NonNull<T>>>);
 
 impl<T> LinkedListLink<T> {
-    fn get(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
+    fn get(&self, cs: CriticalSection) -> Option<NonNull<T>> {
         self.0.get(cs)
     }
 
-    fn set(&self, cs: &CriticalSection, value: Option<NonNull<T>>) {
+    fn set(&self, cs: CriticalSection, value: Option<NonNull<T>>) {
         self.0.set(cs, value)
     }
 
-    fn take(&self, cs: &CriticalSection) -> Option<NonNull<T>> {
+    fn take(&self, cs: CriticalSection) -> Option<NonNull<T>> {
         self.0.take(cs)
     }
 }
@@ -56,7 +56,7 @@ pub struct LinkedList<T> {
 }
 
 impl<T> LinkedList<T> {
-    pub fn with_first<F, R>(&self, cs: &CriticalSection, f: F) -> Option<R>
+    pub fn with_first<F, R>(&self, cs: CriticalSection, f: F) -> Option<R>
     where
         F: FnOnce(&T) -> R,
     {
@@ -67,7 +67,7 @@ impl<T> LinkedList<T> {
 }
 
 impl<T: LinkedListItem> LinkedList<T> {
-    pub fn pop_first(&self, cs: &CriticalSection) -> Option<&T> {
+    pub fn pop_first(&self, cs: CriticalSection) -> Option<&T> {
         self.core.get(cs).map(|core| {
             let first = unsafe { core.first.as_ref() };
             first.remove(cs);
@@ -89,7 +89,7 @@ pub trait LinkedListItem: Sized {
 
     fn list(&self) -> &LinkedList<Self>;
 
-    fn is_in_queue(&self, cs: &CriticalSection) -> bool {
+    fn is_in_queue(&self, cs: CriticalSection) -> bool {
         let links = self.links();
         links.previous.get(cs).is_some()
             || links.next.get(cs).is_some()
@@ -100,7 +100,7 @@ pub trait LinkedListItem: Sized {
                 .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
-    fn insert_front(&self, cs: &CriticalSection) -> &Self {
+    fn insert_front(&self, cs: CriticalSection) -> &Self {
         if self.is_in_queue(cs) {
             return self;
         }
@@ -128,7 +128,7 @@ pub trait LinkedListItem: Sized {
         self
     }
 
-    fn insert_back(&self, cs: &CriticalSection) -> &Self {
+    fn insert_back(&self, cs: CriticalSection) -> &Self {
         if self.is_in_queue(cs) {
             return self;
         }
@@ -156,7 +156,7 @@ pub trait LinkedListItem: Sized {
         self
     }
 
-    fn remove(&self, cs: &CriticalSection) {
+    fn remove(&self, cs: CriticalSection) {
         let self_ptr = self as *const Self;
 
         let links = self.links();
@@ -206,11 +206,11 @@ pub trait LinkedListItem: Sized {
 }
 
 trait LinkedListItemUtil: LinkedListItem {
-    fn set_previous(&self, cs: &CriticalSection, previous: Option<NonNull<Self>>) {
+    fn set_previous(&self, cs: CriticalSection, previous: Option<NonNull<Self>>) {
         self.links().previous.set(cs, previous);
     }
 
-    fn set_next(&self, cs: &CriticalSection, next: Option<NonNull<Self>>) {
+    fn set_next(&self, cs: CriticalSection, next: Option<NonNull<Self>>) {
         self.links().next.set(cs, next);
     }
 }
@@ -221,8 +221,6 @@ impl<T: LinkedListItem> LinkedListItemUtil for T {}
 mod tests {
     use super::*;
 
-    use crate::interrupt;
-
     #[derive(Default)]
     struct TestLinkedList<'a> {
         list: LinkedList<Node<'a>>,
@@ -230,7 +228,7 @@ mod tests {
 
     impl<'a> TestLinkedList<'a> {
         fn assert_is_valid(&self) {
-            interrupt::free(|cs| unsafe {
+            critical_section::with(|cs| unsafe {
                 if let Some(ends) = self.list.core.get(cs) {
                     assert!(ends.first.as_ref().links.previous.get(cs).is_none());
                     assert!(ends.last.as_ref().links.next.get(cs).is_none());
@@ -268,10 +266,10 @@ mod tests {
         }
 
         fn is_empty(&self) -> bool {
-            interrupt::free(|cs| self.list.core.get(cs).is_none())
+            critical_section::with(|cs| self.list.core.get(cs).is_none())
         }
 
-        fn contains(&self, node: *const Node<'a>, cs: &CriticalSection) -> bool {
+        fn contains(&self, node: *const Node<'a>, cs: CriticalSection) -> bool {
             if let Some(ends) = self.list.core.get(cs) {
                 let mut current_node = ends.first;
 
@@ -325,7 +323,7 @@ mod tests {
 
     #[test]
     fn singleton_insert_front_is_valid() {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             let list = TestLinkedList::default();
 
             let node = Node::new(&list);
@@ -338,7 +336,7 @@ mod tests {
 
     #[test]
     fn singleton_insert_back_is_valid() {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             let list = TestLinkedList::default();
 
             let node = Node::new(&list);
@@ -351,7 +349,7 @@ mod tests {
 
     #[test]
     fn list_a_b_is_valid() {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             let list = TestLinkedList::default();
 
             let node_a = Node::new(&list);
@@ -374,7 +372,7 @@ mod tests {
 
     #[test]
     fn list_b_a_is_valid() {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             let list = TestLinkedList::default();
 
             let node_a = Node::new(&list);
@@ -396,7 +394,7 @@ mod tests {
     }
 
     fn run_triple_test(remove_order: [usize; 3]) {
-        interrupt::free(|cs| {
+        critical_section::with(|cs| {
             let list = TestLinkedList::default();
 
             let mut nodes = [Node::new(&list), Node::new(&list), Node::new(&list)];

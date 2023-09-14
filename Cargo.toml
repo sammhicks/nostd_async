@@ -20,8 +20,9 @@ cortex_m = ["cortex-m"]
 wfe = ["cortex-m"]
 
 [dependencies]
-bare-metal = "0.2"
 cortex-m = { version = "0.7", optional = true }
+critical-section = "1.1.2"
 
 [dev-dependencies]
 futures-micro = "0.5"
+critical-section = { version = "1.1.2", features = ["std"] }
