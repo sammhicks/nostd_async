@@ -5,8 +5,6 @@ use core::{
     task::{Context, RawWaker, RawWakerVTable, Waker},
 };
 
-use bare_metal::CriticalSection;
-
 use crate::{
     interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
@@ -44,10 +42,8 @@ struct TaskCore {
 }
 
 impl TaskCore {
-    fn run_once(&self, cs: &CriticalSection) {
-        if let Some(mut task_handle) = self.task_handle.take(cs) {
-            self.remove(cs);
-
+    fn run_once(&self) {
+        if let Some(mut task_handle) = interrupt::free(|cs| self.task_handle.take(cs)) {
             let data = self as *const Self as *const ();
             let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
             let mut cx = Context::from_waker(&waker);
@@ -56,7 +52,7 @@ impl TaskCore {
                 .poll_task(&mut cx)
                 .is_pending()
             {
-                self.task_handle.set(cs, Some(task_handle));
+                interrupt::free(|cs| self.task_handle.set(cs, Some(task_handle)));
             }
         }
     }
@@ -192,15 +188,13 @@ impl Runtime {
     }
 
     unsafe fn run_once(&self) {
-        if interrupt::free(|cs| {
-            self.tasks
-                .with_first(cs, |first| first.run_once(cs))
-                .is_none()
-        }) {
+        if let Some(first_task) = interrupt::free(|cs| self.tasks.pop_first(cs)) {
+            first_task.run_once();
+        } else {
             #[cfg(all(feature = "cortex_m", not(feature = "wfe")))]
             cortex_m::asm::wfi();
             #[cfg(all(feature = "cortex_m", feature = "wfe"))]
             cortex_m::asm::wfe();
-        };
+        }
     }
 }

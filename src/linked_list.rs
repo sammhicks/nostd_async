@@ -66,6 +66,16 @@ impl<T> LinkedList<T> {
     }
 }
 
+impl<T: LinkedListItem> LinkedList<T> {
+    pub fn pop_first(&self, cs: &CriticalSection) -> Option<&T> {
+        self.core.get(cs).map(|core| {
+            let first = unsafe { core.first.as_ref() };
+            first.remove(cs);
+            first
+        })
+    }
+}
+
 impl<T> Default for LinkedList<T> {
     fn default() -> Self {
         Self {
