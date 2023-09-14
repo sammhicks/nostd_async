@@ -8,9 +8,9 @@ use core::{
 use bare_metal::CriticalSection;
 
 use crate::{
-    cell::Mutex,
     interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
+    mutex::Mutex,
     non_null::NonNull,
 };
 

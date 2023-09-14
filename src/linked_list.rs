@@ -1,6 +1,6 @@
 use bare_metal::CriticalSection;
 
-use crate::{cell::Mutex, non_null::NonNull};
+use crate::{mutex::Mutex, non_null::NonNull};
 
 struct LinkedListLink<T>(Mutex<Option<NonNull<T>>>);
 

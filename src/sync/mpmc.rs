@@ -5,9 +5,9 @@ use core::{
 };
 
 use crate::{
-    cell::Mutex,
     interrupt,
     linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
+    mutex::Mutex,
 };
 
 pub struct Buffer<'b, T> {
