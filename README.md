@@ -16,13 +16,20 @@ pub fn main() {
 
 ## Features
 
-### `cortex-m`
+### `avr`
+
+Enables AVR Support.
+
+ + Disables interrupts when scheduling and descheduling tasks
+ + Waits for interrupts when there are no tasks remaining
+
+### `cortex_m`
 
 Enables Cortex-M Support.
 
  + Disables interrupts when scheduling and descheduling tasks
  + Waits for interrupts when there are no tasks remaining
 
-### `wfe`
+### `wfe` (also enables `cortex_m`)
 
 Uses `wfe` instead of `wfi` if there are no pending tasks

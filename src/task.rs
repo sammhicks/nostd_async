@@ -190,6 +190,8 @@ impl Runtime {
         if let Some(first_task) = critical_section::with(|cs| self.tasks.pop_first(cs)) {
             first_task.run_once();
         } else {
+            #[cfg(feature = "avr")]
+            avr_device::asm::sleep();
             #[cfg(all(feature = "cortex_m", not(feature = "wfe")))]
             cortex_m::asm::wfi();
             #[cfg(all(feature = "cortex_m", feature = "wfe"))]
