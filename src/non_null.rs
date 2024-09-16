@@ -1,5 +1,5 @@
 /// *const T but non-zero and covariant
-/// Essentially a restricted version of core::ptr::NonNull<T>
+/// Essentially a restricted version of `core::ptr::NonNull<T>`
 #[repr(transparent)]
 pub struct NonNull<T>(core::ptr::NonNull<T>);
 

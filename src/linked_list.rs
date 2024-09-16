@@ -10,7 +10,7 @@ impl<T> LinkedListLink<T> {
     }
 
     fn set(&self, cs: CriticalSection, value: Option<NonNull<T>>) {
-        self.0.set(cs, value)
+        self.0.set(cs, value);
     }
 
     fn take(&self, cs: CriticalSection) -> Option<NonNull<T>> {
@@ -234,7 +234,7 @@ mod tests {
                         break;
                     }
                 }
-            })
+            });
         }
 
         fn is_empty(&self) -> bool {
@@ -358,11 +358,11 @@ mod tests {
 
             let mut nodes = [Node::new(&list), Node::new(&list), Node::new(&list)];
 
-            for node in nodes.iter_mut() {
+            for node in &mut nodes {
                 node.insert_back(cs);
             }
 
-            for node in nodes.iter() {
+            for node in &nodes {
                 assert!(list.contains(node, cs));
             }
 

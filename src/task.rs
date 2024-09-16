@@ -16,13 +16,11 @@ unsafe fn waker_clone(context: *const ()) -> RawWaker {
 }
 
 unsafe fn waker_wake(context: *const ()) {
-    let task = &*(context as *const TaskCore);
-    critical_section::with(|cs| task.insert_back(cs));
+    critical_section::with(|cs| context.cast::<TaskCore>().as_ref().unwrap().insert_back(cs));
 }
 
 unsafe fn waker_wake_by_ref(context: *const ()) {
-    let task = &*(context as *const TaskCore);
-    critical_section::with(|cs| task.insert_back(cs));
+    critical_section::with(|cs| context.cast::<TaskCore>().as_ref().unwrap().insert_back(cs));
 }
 
 unsafe fn waker_drop(_context: *const ()) {}
@@ -43,7 +41,7 @@ struct TaskCore {
 impl TaskCore {
     fn run_once(&self) {
         if let Some(mut task_handle) = critical_section::with(|cs| self.task_handle.take(cs)) {
-            let data = self as *const Self as *const ();
+            let data = core::ptr::from_ref(self).cast();
             let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
             let mut cx = Context::from_waker(&waker);
 
@@ -79,6 +77,10 @@ impl<'a, T> JoinHandle<'a, T> {
     /// Drive the runtime until the handle's task completes.
     ///
     /// Returns the value returned by the future
+    ///
+    /// # Panics
+    ///
+    /// Panics if there's a bug in `nostd_async`
     pub fn join(self) -> T {
         while critical_section::with(|cs| self.task_core.task_handle.has_some(cs)) {
             unsafe { self.task_core.runtime.as_ref().run_once() };
@@ -131,10 +133,12 @@ where
 
     /// Spawn the task into the given runtime.
     /// Note that the task will not be run until a join handle is joined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the task has already been spawned
     pub fn spawn(&'a mut self, runtime: &'a Runtime) -> JoinHandle<'a, F::Output> {
-        if self.core.is_some() {
-            panic!("Task already spawned");
-        }
+        assert!(self.core.is_none(), "Task already spawned");
 
         let future = unsafe {
             Mutex::new(Some(core::ptr::NonNull::from(core::mem::transmute::<
@@ -168,7 +172,7 @@ impl<F: Future> core::ops::Drop for Task<F> {
             if let Some(core) = self.core.take() {
                 core.remove(cs);
             }
-        })
+        });
     }
 }
 

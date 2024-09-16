@@ -45,6 +45,7 @@ pub struct Sender<'b, T> {
 }
 
 impl<'b, T> Sender<'b, T> {
+    #[must_use = "Send does nothing until it is polled or awaited"]
     pub fn send(&self, value: T) -> Send<'b, T> {
         Send {
             buffer: self.buffer,
@@ -109,6 +110,7 @@ pub struct Receiver<'b, T> {
 }
 
 impl<'b, T> Receiver<'b, T> {
+    #[must_use = "Receive does nothing until it is polled or awaited"]
     pub fn receive(&self) -> Receive<'b, T> {
         Receive {
             buffer: self.buffer,
@@ -140,20 +142,20 @@ impl<'b, T> Future for Receive<'b, T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         critical_section::with(|cs| {
             let this = unsafe { self.get_unchecked_mut() };
-            match this.buffer.senders.with_first(cs, |sender| {
+
+            let sender_value = this.buffer.senders.with_first(cs, |sender| {
                 sender.remove(cs);
                 sender.waker.take(cs).expect("Sender has waker").wake();
                 sender.value.take(cs).expect("Sender has value")
-            }) {
-                Some(value) => {
-                    this.remove(cs);
-                    Poll::Ready(value)
-                }
-                None => {
-                    this.insert_back(cs);
-                    this.waker.set(cs, Some(cx.waker().clone()));
-                    Poll::Pending
-                }
+            });
+
+            if let Some(value) = sender_value {
+                this.remove(cs);
+                Poll::Ready(value)
+            } else {
+                this.insert_back(cs);
+                this.waker.set(cs, Some(cx.waker().clone()));
+                Poll::Pending
             }
         })
     }

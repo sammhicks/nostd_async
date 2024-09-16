@@ -25,7 +25,7 @@ impl<T: Copy> Mutex<T> {
 }
 
 impl<T: Default> Mutex<T> {
-    /// Takes the value of the cell, leaving Default::default() in its place.
+    /// Takes the value of the cell, leaving `Default::default()` in its place.
     pub fn take(&self, cs: CriticalSection) -> T {
         core::mem::take(unsafe { &mut *self.0.borrow(cs).get() })
     }
