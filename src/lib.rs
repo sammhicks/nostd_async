@@ -1,6 +1,10 @@
 #![no_std]
 
 //!
+//! # Note
+//!
+//! `nostd_async` is no longer under active development, I suggest using [embassy](https://embassy.dev/) instead, which has a much better async runtime.
+//!
 //! # Example
 //! ```
 //! let runtime = nostd_async::Runtime::new();

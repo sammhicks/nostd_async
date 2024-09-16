@@ -1,5 +1,7 @@
 # nostd_async
 
+**NOTE**: `nostd_async` is no longer under active development, I suggest using [embassy](https://embassy.dev/) instead, which has a much better async runtime.
+
 ## Example
 
 ```rust
