@@ -196,9 +196,7 @@ impl Runtime {
         } else {
             #[cfg(feature = "avr")]
             avr_device::asm::sleep();
-            #[cfg(all(feature = "cortex_m", not(feature = "wfe")))]
-            cortex_m::asm::wfi();
-            #[cfg(all(feature = "cortex_m", feature = "wfe"))]
+            #[cfg(feature = "cortex_m")]
             cortex_m::asm::wfe();
         }
     }

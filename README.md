@@ -28,8 +28,5 @@ Enables AVR Support.
 Enables Cortex-M Support.
 
  + Disables interrupts when scheduling and descheduling tasks
- + Waits for interrupts when there are no tasks remaining
+ + Waits for events when there are no tasks remaining
 
-### `wfe` (also enables `cortex_m`)
-
-Uses `wfe` instead of `wfi` if there are no pending tasks

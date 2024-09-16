@@ -1,6 +1,6 @@
 [package]
 name = "nostd_async"
-version = "0.6.2"
+version = "0.7.0"
 authors = ["Samuel Hicks <SamMHicks@hotmail.co.uk>"]
 edition = "2018"
 description = "An asyncronous runtime for a single-threaded no_std environment"
@@ -18,7 +18,6 @@ categories = ["asynchronous", "embedded", "no-std"]
 [features]
 avr = ["dep:avr-device"]
 cortex_m = ["dep:cortex-m"]
-wfe = ["cortex_m"]
 
 [dependencies]
 avr-device = { version = "0.5.2", optional = true }
