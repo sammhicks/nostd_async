@@ -100,34 +100,6 @@ pub trait LinkedListItem: Sized {
                 .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
-    fn insert_front(&self, cs: CriticalSection) -> &Self {
-        if self.is_in_queue(cs) {
-            return self;
-        }
-
-        let self_ptr = NonNull::new(self);
-
-        let list = &self.list().core;
-
-        match list.get(cs) {
-            Some(mut core) => {
-                self.set_next(cs, Some(core.first));
-                unsafe { core.first.as_ref() }.set_previous(cs, Some(self_ptr));
-                core.first = self_ptr;
-                list.set(cs, Some(core));
-            }
-            None => list.set(
-                cs,
-                Some(LinkedListCore {
-                    first: self_ptr,
-                    last: self_ptr,
-                }),
-            ),
-        }
-
-        self
-    }
-
     fn insert_back(&self, cs: CriticalSection) -> &Self {
         if self.is_in_queue(cs) {
             return self;
@@ -322,19 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn singleton_insert_front_is_valid() {
-        critical_section::with(|cs| {
-            let list = TestLinkedList::default();
-
-            let node = Node::new(&list);
-            node.insert_front(cs);
-
-            list.assert_is_valid();
-            assert!(list.contains(&node, cs));
-        });
-    }
-
-    #[test]
     fn singleton_insert_back_is_valid() {
         critical_section::with(|cs| {
             let list = TestLinkedList::default();
@@ -378,8 +337,8 @@ mod tests {
             let node_a = Node::new(&list);
             let node_b = Node::new(&list);
 
-            node_a.insert_front(cs);
-            node_b.insert_front(cs);
+            node_b.insert_back(cs);
+            node_a.insert_back(cs);
 
             list.assert_is_valid();
             assert!(list.contains(&node_a, cs));
