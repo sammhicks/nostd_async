@@ -191,13 +191,21 @@ impl Runtime {
     }
 
     unsafe fn run_once(&self) {
-        if let Some(first_task) = critical_section::with(|cs| self.tasks.pop_first(cs)) {
+        let first_task = critical_section::with(|cs| {
+            let first_task = self.tasks.pop_first(cs);
+
+            if first_task.is_none() {
+                #[cfg(feature = "avr")]
+                avr_device::asm::sleep();
+                #[cfg(feature = "cortex_m")]
+                cortex_m::asm::wfe();
+            }
+
+            first_task
+        });
+
+        if let Some(first_task) = first_task {
             first_task.run_once();
-        } else {
-            #[cfg(feature = "avr")]
-            avr_device::asm::sleep();
-            #[cfg(feature = "cortex_m")]
-            cortex_m::asm::wfe();
         }
     }
 }
