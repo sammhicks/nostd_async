@@ -66,31 +66,30 @@ fn test_abort() {
 
         let channel = SingleMessage::new();
 
-        let mut blocking_task = Box::new(nostd_async::Task::new(async {
+        let mut blocking_task = Box::pin(nostd_async::Task::new(async {
             channel.recv().await;
             panic!("Should not reach here!");
         }));
 
-        let blocking_task_handle = blocking_task.spawn(&runtime);
+        runtime.spawn(blocking_task.as_mut());
 
-        let mut long_task = nostd_async::Task::new(async {
+        let long_task = core::pin::pin!(nostd_async::Task::new(async {
             for entry in long_task_has_completed.iter_mut() {
                 *entry = true;
                 futures_micro::yield_once().await;
             }
-        });
+        }));
 
-        let long_task_handle = long_task.spawn(&runtime);
+        let long_task_handle = runtime.spawn(long_task);
 
-        let mut completing_task = nostd_async::Task::new(async {
+        let completing_task = core::pin::pin!(nostd_async::Task::new(async {
             completing_task_has_completed = true;
-        });
+        }));
 
-        let completing_task_handle = completing_task.spawn(&runtime);
+        let completing_task_handle = runtime.spawn(completing_task);
 
         completing_task_handle.join();
 
-        drop(blocking_task_handle);
         drop(blocking_task);
 
         channel.send(());

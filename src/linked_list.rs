@@ -136,7 +136,7 @@ pub trait LinkedListItem: Sized {
 
         match (links.previous.take(cs), links.next.take(cs)) {
             (None, None) => {
-                // Possible not queued
+                // Possibly not queued
                 if let Some(ends) = list.get(cs) {
                     if core::ptr::eq(ends.first.as_ptr(), self_ptr) {
                         list.set(cs, None);

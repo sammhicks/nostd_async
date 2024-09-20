@@ -16,11 +16,11 @@ fn task(
 pub fn main() {
     let runtime = nostd_async::Runtime::new();
 
-    let mut t1 = task(1, 4);
-    let mut t2 = task(2, 4);
+    let t1 = core::pin::pin!(task(1, 4));
+    let t2 = core::pin::pin!(task(2, 4));
 
-    let h1 = t1.spawn(&runtime);
-    let h2 = t2.spawn(&runtime);
+    let h1 = runtime.spawn(t1);
+    let h2 = runtime.spawn(t2);
 
     println!("Task 1: {}", h1.join());
     println!("Task 2: {}", h2.join());

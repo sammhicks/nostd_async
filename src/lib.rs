@@ -9,12 +9,12 @@
 //! ```
 //! let runtime = nostd_async::Runtime::new();
 //!
-//! let mut task = nostd_async::Task::new(async {
+//! let mut task = core::pin::pin!(nostd_async::Task::new(async {
 //!     println!("Hello World");
 //!     42
-//! });
+//! }));
 //!
-//! let handle = task.spawn(&runtime);
+//! let handle = runtime.spawn(task);
 //!
 //! assert_eq!(handle.join(), 42);
 //! ```
